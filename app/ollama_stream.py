@@ -1,5 +1,5 @@
 """
-ollama_stream.py - MODIFICADO PARA GROQ
+ollama_stream.py - MODIFICADO PARA GROQ - INICIALIZACIÓN LAZY
 Módulo para manejo de streaming usando EXCLUSIVAMENTE Groq Cloud
 Llama 3.3 70B en todos los casos (local y producción)
 """
@@ -30,8 +30,27 @@ class GroqConfig:
         masked_key = f"{self.api_key[:8]}..." if self.api_key else "None"
         return f"GroqConfig(model={self.model}, api_key={masked_key})"
 
-# Instancia global de configuración
-config = GroqConfig()
+# 🔥 CAMBIO CRÍTICO: NO inicializar automáticamente
+config = None
+
+def get_config():
+    """Obtiene la configuración, inicializándola si es necesario"""
+    global config
+    if config is None:
+        # Intentar configurar desde variables de entorno
+        api_key = os.environ.get('GROQ_API_KEY')
+        if not api_key:
+            # Si no hay API key, dar instrucciones claras
+            raise ValueError(
+                "❌ GROQ_API_KEY no configurada.\n"
+                "💡 Soluciones:\n"
+                "   1. Configura variable de entorno: export GROQ_API_KEY='tu_api_key'\n"
+                "   2. O usa: set_groq_config('tu_api_key')\n"
+                "   3. Obtén API key gratis en: https://console.groq.com/keys"
+            )
+        config = GroqConfig(api_key=api_key)
+        logger.info(f"✅ Groq configurado automáticamente: {config}")
+    return config
 
 def set_groq_config(api_key: Optional[str] = None, model: str = "llama-3.3-70b-versatile"):
     """Configura la conexión a Groq Cloud"""
@@ -68,15 +87,14 @@ class GroqClient:
     """Cliente unificado para Groq Cloud"""
     
     def __init__(self):
-        if not config.api_key:
-            raise ValueError("Configuración Groq no inicializada. Usa set_groq_config() primero.")
-        self.client = Groq(api_key=config.api_key)
+        self.config = get_config()  # 🔥 CAMBIO: usar get_config()
+        self.client = Groq(api_key=self.config.api_key)
     
     def chat_completion(self, messages: List[Dict[str, str]], temperature: float = 0.8) -> str:
         """Completa un chat sin streaming usando Groq"""
         try:
             completion = self.client.chat.completions.create(
-                model=config.model,
+                model=self.config.model,
                 messages=messages,
                 temperature=temperature,
                 max_completion_tokens=4096,  # Generoso para respuestas educativas
@@ -96,7 +114,7 @@ class GroqClient:
         """Stream de chat usando Groq Cloud"""
         try:
             completion = self.client.chat.completions.create(
-                model=config.model,
+                model=self.config.model,
                 messages=messages,
                 temperature=temperature,
                 max_completion_tokens=4096,
@@ -188,9 +206,10 @@ def stream_chat_for_user(
     # Preparar mensajes
     messages = prepare_messages(user_customize_ai, kb_context, prompt)
     
-    logger.info(f"🚀 Iniciando stream con Groq Cloud - Modelo: {config.model}")
-    
     try:
+        current_config = get_config()  # 🔥 CAMBIO: obtener config dinámicamente
+        logger.info(f"🚀 Iniciando stream con Groq Cloud - Modelo: {current_config.model}")
+        
         groq_client = GroqClient()
         
         for chunk in groq_client.stream_completion(messages):
@@ -209,9 +228,10 @@ def chat_once(
     """
     Realiza una sola consulta usando EXCLUSIVAMENTE Groq Cloud
     """
-    logger.info(f"💬 Consulta única con Groq Cloud - Modelo: {config.model}")
-    
     try:
+        current_config = get_config()  # 🔥 CAMBIO: obtener config dinámicamente
+        logger.info(f"💬 Consulta única con Groq Cloud - Modelo: {current_config.model}")
+        
         groq_client = GroqClient()
         response = groq_client.chat_completion(messages)
         
@@ -256,11 +276,12 @@ def ollama_run_for_kb(model: str, prompt: str) -> str:
 
 def test_stream_functionality(prompt: str = "Explica el concepto de fotosíntesis de manera didáctica para estudiantes de secundaria"):
     """Función de prueba para verificar que el streaming funciona correctamente"""
-    print(f"🧪 Probando streaming Groq con prompt: '{prompt}'")
-    print(f"🔧 Modelo configurado: {config.model}")
-    print(f"🔑 API Key: {config.api_key[:8] if config.api_key else 'NO CONFIGURADA'}...")
-    
     try:
+        current_config = get_config()
+        print(f"🧪 Probando streaming Groq con prompt: '{prompt}'")
+        print(f"🔧 Modelo configurado: {current_config.model}")
+        print(f"🔑 API Key: {current_config.api_key[:8]}...")
+        
         accumulated = ""
         chunk_count = 0
         start_time = time.time()
@@ -298,14 +319,48 @@ def setup_groq_from_env():
         logger.warning("⚠️ GROQ_API_KEY no encontrada en variables de entorno")
         return False
 
+def is_groq_configured() -> bool:
+    """Verifica si Groq está configurado sin lanzar excepción"""
+    try:
+        get_config()
+        return True
+    except ValueError:
+        return False
+
+def get_groq_status() -> dict:
+    """Obtiene el estado actual de la configuración de Groq"""
+    try:
+        current_config = get_config()
+        return {
+            "configured": True,
+            "model": current_config.model,
+            "api_key_present": bool(current_config.api_key),
+            "api_key_preview": current_config.api_key[:8] + "..." if current_config.api_key else "None"
+        }
+    except ValueError as e:
+        return {
+            "configured": False,
+            "error": str(e),
+            "model": None,
+            "api_key_present": False
+        }
+
 if __name__ == "__main__":
     # Configurar logging para pruebas
     logging.basicConfig(level=logging.INFO)
     
-    # Intentar configurar desde variables de entorno
-    if not setup_groq_from_env():
-        print("❌ Por favor configura GROQ_API_KEY como variable de entorno")
+    # Verificar estado de configuración
+    status = get_groq_status()
+    print(f"🔍 Estado de Groq: {status}")
+    
+    if not status["configured"]:
+        print("❌ Groq no está configurado")
+        print("💡 Configura GROQ_API_KEY como variable de entorno")
         print("   Obtén tu API key gratis en: https://console.groq.com/keys")
+        
+        # Ejemplo de cómo configurar manualmente
+        print("\n🛠️ Para configurar manualmente:")
+        print("   set_groq_config('tu_api_key_aqui')")
         exit(1)
     
     # Probar conexión
