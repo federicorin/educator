@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Instituto Argentino Excelsior: iaedugroup</title>
+</head>
+<body style="margin:0; padding:0; font-family:'Segoe UI', sans-serif;">
+
+<table width="600" cellpadding="0" cellspacing="0" align="center"
+  style="background:#ffffff; border-radius:16px; box-shadow:0 5px 20px rgba(0,0,0,0.05);
+         padding: 0 30px; border:1px solid #812727;">
+  <tr>
+    <td align="center">
+
+    <!-- Contenedor central -->
+    <table width="600" cellpadding="0" cellspacing="0"
+      style="background:#ffffff; border-radius:16px; box-shadow:0 5px 20px rgba(0,0,0,0.1); padding: 0 30px;">
+
+      <!-- Encabezado -->
+      <tr>
+        <td align="center" style="padding: 30px 0;">
+          <img src="https://cdn-icons-png.flaticon.com/512/3039/3039439.png" width="64" height="64" alt="Icono de llave" style="margin-bottom: 10px;">
+          <h2 style="color:#812727; font-size:24px; margin: 0;">Instituto Argentino Excelsior: iaedugroup</h2>
+        </td>
+      </tr>
+
+      <!-- Cuerpo -->
+      <tr>
+        <td style="padding-bottom: 30px; color:#333; font-size:15px; line-height:1.6;">
+          <p>Hola {{ first_name }},</p>
+          <p>El Instituto Argentino Excelsior, te ha enviado una invitacion a su chatbot con IA.</p>
+
+          <div style="text-align:center; margin:30px 0;">
+            <a href="{{ invite_url }}" style="display:inline-block; padding:12px 24px; font-size:16px; font-weight:bold; color:#fff; background:#812727;
+            border-radius:10px; text-decoration:none;">¡Unirse!</a>
+          </div>
+
+          <!-- Texto alternativo con la URL -->
+<div style="text-align:center; font-size:14px; color:#666; margin-bottom:20px;">
+  <p style="margin-bottom:6px;">Si el botón no funciona, copiá y pegá esta URL en tu navegador:</p>
+  <div style="background:#f4f4f4; padding:10px 14px; border-radius:8px; border:1px solid #ccc;
+              display:inline-block; max-width:90%; word-break:break-all; font-size:13px; color:#444;">
+    {{ invite_url }}
+  </div>
+</div>
+
+          <p style="text-align:center; font-size:14px; color:#555;">
+            Este enlace es válido por <strong>{{ expiration }}</strong>.
+          </p>
+
+        </td>
+      </tr>
+
+      <!-- Footer -->
+      <tr>
+        <td align="center" width="600"
+            style="background-color:#f7f7f7; padding:20px; font-size:12px; color:#999; border-top:1px solid #ddd;">
+          © 2025 iaedugroup · No respondas a este correo
+        </td>
+      </tr>
+
+    </table>
+
+    </td>
+  </tr>
+</table>
+
+</body>
+</html>

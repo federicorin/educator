@@ -1,0 +1,9 @@
+Hola {{ first_name }},
+
+El Instituto Argentino Excelsior, te ha enviado una invitacion a su chatbot con IA.
+
+Hacé clic en el siguiente enlace para continuar: {{ invite_url }}
+
+Este enlace es válido por {{ expiration }}.
+
+© 2025 iaedugroup · No respondas a este correo
