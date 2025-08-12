@@ -1,0 +1,12 @@
+Flask
+Flask-SQLAlchemy
+python-docx
+pytesseract
+Pillow
+python-pptx
+moviepy
+SpeechRecognition
+rarfile
+py7zr
+PyMuPDF
+Werkzeug
