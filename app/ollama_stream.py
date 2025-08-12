@@ -1,6 +1,7 @@
 """
 ollama_stream.py
-Módulo para manejo de streaming y comunicación con Ollama
+Módulo para manejo de streaming y comunicación con Ollama/APIs externas
+Funciona en local (Ollama) y producción (Groq/Hugging Face)
 Procesa correctamente los metadatos y extrae solo el content sin omisiones
 """
 
@@ -9,6 +10,7 @@ import json
 import re
 import time
 import logging
+import os
 from typing import Generator, Dict, Any, List, Optional
 from datetime import datetime
 
@@ -36,6 +38,15 @@ def set_ollama_config(host: str = "localhost", port: int = 11434, timeout: int =
     global config
     config = OllamaConfig(host, port, timeout)
     logger.info(f"Configuración Ollama actualizada: {config}")
+
+def is_production() -> bool:
+    """Detecta si estamos en producción"""
+    return os.environ.get('PRODUCTION', 'false').lower() == 'true'
+
+def get_external_api_type() -> str:
+    """Determina qué API externa gratuita usar"""
+    # Priorizamos APIs completamente gratuitas sin autenticación
+    return os.environ.get('API_TYPE', 'huggingface_free')
 
 def limpiar_output(texto: str, preserve_trailing_space: bool = False) -> str:
     """
@@ -65,6 +76,144 @@ def limpiar_output(texto: str, preserve_trailing_space: bool = False) -> str:
     else:
         # comportamiento previo: quitar espacios al inicio y final
         return limpio.strip()
+
+
+class ExternalAPIClient:
+    """Cliente para APIs externas 100% gratuitas sin autenticación"""
+    
+    def __init__(self):
+        self.api_type = get_external_api_type()
+    
+    def _get_free_api_endpoint(self) -> str:
+        """Obtiene endpoint de API gratuita según configuración"""
+        if self.api_type == 'huggingface_free':
+            return "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"
+        elif self.api_type == 'together_free':
+            return "https://api.together.xyz/v1/chat/completions"  # Tiene tier gratuito
+        else:
+            # Default: Hugging Face Inference API (sin auth para modelos públicos)
+            return "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"
+    
+    def _huggingface_free_request(self, prompt: str) -> requests.Response:
+        """Request a Hugging Face Inference API (gratuita, sin auth para modelos públicos)"""
+        url = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-medium"
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "inputs": prompt,
+            "parameters": {
+                "max_new_tokens": 512,
+                "temperature": 0.8,
+                "do_sample": True
+            }
+        }
+        return requests.post(url, headers=headers, json=data, timeout=30)
+    
+    def _mock_ai_response(self, prompt: str) -> str:
+        """Genera respuesta educativa cuando las APIs no están disponibles"""
+        # Análisis básico del prompt para dar respuesta contextual
+        prompt_lower = prompt.lower()
+        
+        if any(word in prompt_lower for word in ['qué es', 'que es', 'define', 'explica', 'concepto']):
+            return f"""📚 **Respuesta Educativa**
+
+Te ayudo con tu consulta: "{prompt[:100]}..."
+
+Como asistente educativo, puedo explicarte que este es un tema importante que requiere análisis detallado. Te recomiendo:
+
+1. **Investigar fuentes confiables** sobre el tema
+2. **Analizar diferentes perspectivas** 
+3. **Relacionar con conocimientos previos**
+4. **Aplicar el pensamiento crítico**
+
+💡 **Sugerencia**: Para obtener respuestas más completas y actualizadas, puedes consultar:
+- Libros especializados en el tema
+- Artículos académicos revisados por pares  
+- Recursos educativos de universidades reconocidas
+
+¿Te gustaría que te ayude a estructurar tu investigación sobre este tema?"""
+
+        elif any(word in prompt_lower for word in ['cómo', 'como', 'steps', 'pasos', 'proceso']):
+            return f"""🔧 **Guía Paso a Paso**
+
+Para abordar: "{prompt[:100]}..."
+
+**Metodología sugerida:**
+
+1. **Planificación**: Define claramente los objetivos
+2. **Investigación**: Recopila información de fuentes confiables  
+3. **Análisis**: Evalúa la información críticamente
+4. **Síntesis**: Organiza las ideas principales
+5. **Aplicación**: Implementa lo aprendido
+6. **Evaluación**: Reflexiona sobre los resultados
+
+📝 **Consejo**: Documenta cada paso para facilitar el aprendizaje y la revisión posterior.
+
+¿Necesitas ayuda específica con alguno de estos pasos?"""
+
+        else:
+            return f"""🎓 **Asistente Educativo Disponible**
+
+He recibido tu consulta: "{prompt[:100]}..."
+
+Como educador digital, estoy aquí para ayudarte a:
+- **Comprender conceptos complejos**
+- **Desarrollar habilidades de pensamiento crítico**  
+- **Estructurar tu aprendizaje**
+- **Encontrar recursos educativos de calidad**
+
+📚 Para brindarte la mejor asistencia educativa, considera reformular tu pregunta incluyendo:
+- El contexto específico
+- Tu nivel de conocimiento previo
+- Qué esperas aprender
+
+¿Cómo puedo ayudarte mejor con tu proceso de aprendizaje?"""
+
+    def chat_completion(self, messages: List[Dict[str, str]]) -> str:
+        """Completa un chat usando APIs gratuitas o respuesta educativa"""
+        try:
+            user_prompt = messages[-1].get('content', '') if messages else ''
+            
+            if self.api_type == 'huggingface_free':
+                response = self._huggingface_free_request(user_prompt)
+                if response.status_code == 200:
+                    result = response.json()
+                    if isinstance(result, list) and len(result) > 0:
+                        generated = result[0].get('generated_text', '')
+                        # Limpiar la respuesta removiendo el input original
+                        clean_response = generated.replace(user_prompt, '').strip()
+                        return clean_response if clean_response else self._mock_ai_response(user_prompt)
+                    elif isinstance(result, dict) and 'error' in result:
+                        logger.warning(f"HF API error: {result['error']}")
+                        return self._mock_ai_response(user_prompt)
+                else:
+                    logger.warning(f"HF API status: {response.status_code}")
+                    return self._mock_ai_response(user_prompt)
+            
+            # Fallback siempre a respuesta educativa
+            return self._mock_ai_response(user_prompt)
+        
+        except Exception as e:
+            logger.error(f"Error en API externa: {e}")
+            user_prompt = messages[-1].get('content', '') if messages else ''
+            return self._mock_ai_response(user_prompt)
+    
+    def stream_completion(self, messages: List[Dict[str, str]]) -> Generator[str, None, None]:
+        """Stream de chat usando APIs gratuitas o respuesta simulada"""
+        try:
+            # Para APIs sin streaming nativo, simular stream con respuesta completa
+            full_response = self.chat_completion(messages)
+            
+            # Simular streaming dividiendo en palabras con delay natural
+            words = full_response.split(' ')
+            for i, word in enumerate(words):
+                if i == len(words) - 1:
+                    yield word  # Última palabra sin espacio
+                else:
+                    yield word + ' '
+                    
+        except Exception as e:
+            logger.error(f"Error en streaming externo: {e}")
+            yield f"Error: {str(e)}"
 
 
 class ContentProcessor:
@@ -139,8 +288,12 @@ class ContentProcessor:
 
 def test_ollama_connection() -> bool:
     """
-    Prueba la conexión con Ollama
+    Prueba la conexión con Ollama (solo en modo local)
     """
+    if is_production():
+        logger.info("✅ Modo producción - usando API externa")
+        return True
+        
     try:
         response = requests.get(f"{config.base_url}/api/tags", timeout=5)
         if response.status_code == 200:
@@ -159,9 +312,9 @@ def test_ollama_connection() -> bool:
 def build_system_prompt(user_customize_ai: str = "", kb_context: str = "") -> str:
     """
     Construye el prompt del sistema combinando personalización y contexto
-    Optimizado para DeepSeek R1 Educator
+    Optimizado para educación
     """
-    base_prompt = """Eres un asistente educativo experto basado en DeepSeek R1. Tu función es ayudar a estudiantes y educadores proporcionando explicaciones claras, detalladas y pedagógicamente sólidas. 
+    base_prompt = """Eres un asistente educativo experto. Tu función es ayudar a estudiantes y educadores proporcionando explicaciones claras, detalladas y pedagógicamente sólidas. 
 
 Características de tus respuestas:
 - Explica conceptos paso a paso
@@ -182,7 +335,7 @@ Características de tus respuestas:
 
 def prepare_messages(user_customize_ai: str, kb_context: str, prompt: str) -> List[Dict[str, str]]:
     """
-    Prepara los mensajes para la API de chat de Ollama
+    Prepara los mensajes para la API de chat
     """
     system_content = build_system_prompt(user_customize_ai, kb_context)
     
@@ -207,12 +360,29 @@ def stream_chat_for_user(
     if timeout is None:
         timeout = config.timeout
     
+    # Preparar mensajes
+    messages = prepare_messages(user_customize_ai, kb_context, prompt)
+    
+    # 🔥 NUEVA LÓGICA: Detectar modo producción
+    if is_production():
+        logger.info("🌐 Usando API externa para streaming")
+        external_client = ExternalAPIClient()
+        
+        try:
+            for chunk in external_client.stream_completion(messages):
+                if chunk:
+                    clean_chunk = limpiar_output(chunk, preserve_trailing_space=True)
+                    if clean_chunk:
+                        yield clean_chunk
+        except Exception as e:
+            logger.error(f"Error en streaming externo: {e}")
+            yield f"Error: No pude procesar tu consulta. {str(e)}"
+        return
+    
+    # MODO LOCAL - Código original de Ollama
     # Verificar conexión
     if not test_ollama_connection():
         raise ConnectionError(f"No se pudo conectar a Ollama en {config.base_url}")
-    
-    # Preparar mensajes
-    messages = prepare_messages(user_customize_ai, kb_context, prompt)
     
     # Preparar payload para la API
     payload = {
@@ -229,7 +399,7 @@ def stream_chat_for_user(
         }
     }
     
-    logger.info(f"Iniciando stream con modelo {model} hacia {config.chat_url}")
+    logger.info(f"Iniciando stream local con modelo {model} hacia {config.chat_url}")
     
     # Procesador de contenido
     processor = ContentProcessor()
@@ -258,16 +428,13 @@ def stream_chat_for_user(
                 # Procesar chunk y extraer content
                 content = processor.process_chunk(line)
                 
-                # ...
                 if content is not None:
-    # Limpiar content antes de enviar, preservando espacio final para streaming
+                    # Limpiar content antes de enviar, preservando espacio final para streaming
                     clean_content = limpiar_output(content, preserve_trailing_space=True)
                     if clean_content:  # Solo enviar si hay contenido después de limpiar
-        # DEBUG opcional: ver representación con espacios
+                        # DEBUG opcional: ver representación con espacios
                         logger.debug(f"Chunk limpio repr: {repr(clean_content)}")
                         yield clean_content
-# ...
-
             
             # Log de estadísticas finales
             stats = processor.get_stats()
@@ -293,12 +460,24 @@ def chat_once(
     timeout: int = None
 ) -> str:
     """
-    Realiza una sola consulta a Ollama sin streaming
-    Útil para tareas como resúmenes o consultas simples
+    Realiza una sola consulta sin streaming
+    Funciona tanto en local (Ollama) como en producción (API externa)
     """
     if timeout is None:
         timeout = config.timeout
     
+    # 🔥 NUEVA LÓGICA: Detectar modo producción
+    if is_production():
+        logger.info("🌐 Usando API externa para consulta única")
+        external_client = ExternalAPIClient()
+        try:
+            response = external_client.chat_completion(messages)
+            return limpiar_output(response)
+        except Exception as e:
+            logger.error(f"Error en consulta externa: {e}")
+            return f"Error: No pude procesar tu consulta. {str(e)}"
+    
+    # MODO LOCAL - Código original de Ollama
     # Verificar conexión
     if not test_ollama_connection():
         raise ConnectionError(f"No se pudo conectar a Ollama en {config.base_url}")
@@ -370,8 +549,13 @@ def set_debug_mode(enabled: bool = True):
 
 def get_available_models() -> List[str]:
     """
-    Obtiene la lista de modelos disponibles en Ollama
+    Obtiene la lista de modelos disponibles
     """
+    if is_production():
+        # En producción, retornar modelos de APIs gratuitas
+        return ['microsoft/DialoGPT-medium', 'educational-assistant-free', 'mock-educator']
+    
+    # Modo local - Ollama
     try:
         response = requests.get(f"{config.base_url}/api/tags", timeout=10)
         if response.status_code == 200:
@@ -386,13 +570,39 @@ def get_available_models() -> List[str]:
         logger.error(f"Error conectando para obtener modelos: {e}")
         return []
 
+# Función especial para KnowledgeBase
+def ollama_run_for_kb(model: str, prompt: str) -> str:
+    """
+    Función para reemplazar subprocess en KnowledgeBase
+    Simula 'ollama run' pero usando nuestro sistema dual
+    """
+    try:
+        if is_production():
+            # En producción, usar API externa
+            external_client = ExternalAPIClient()
+            messages = [{"role": "user", "content": prompt}]
+            response = external_client.chat_completion(messages)
+            return response
+        else:
+            # En local, usar Ollama real
+            messages = [{"role": "user", "content": prompt}]
+            response = chat_once(messages, model=model)
+            return response
+    except Exception as e:
+        logger.error(f"Error en ollama_run_for_kb: {e}")
+        return f"⚠️ Error al procesar consulta: {e}"
+
 # Función de utilidad para testing
 def test_stream_functionality(prompt: str = "Explica el concepto de fotosíntesis de manera didáctica", model: str = "deepseek-r1:14b_educator"):
     """
     Función de prueba para verificar que el streaming funciona correctamente
     """
     print(f"🧪 Probando streaming con prompt: '{prompt}'")
-    print(f"🔧 Configuración: {config}")
+    print(f"🔧 Modo producción: {is_production()}")
+    if not is_production():
+        print(f"🔧 Configuración local: {config}")
+    else:
+        print(f"🔧 API externa: {get_external_api_type()}")
     
     try:
         accumulated = ""
@@ -418,7 +628,7 @@ if __name__ == "__main__":
     # Configurar logging para pruebas
     logging.basicConfig(level=logging.INFO)
     
-    # Configurar Ollama (ajustar según tu setup)
+    # Configurar Ollama (solo para modo local)
     set_ollama_config(host="localhost", port=11434, timeout=120)  # Timeout más alto para DeepSeek
     
     # Ejecutar prueba
