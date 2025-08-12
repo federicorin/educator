@@ -1,6 +1,6 @@
 import os
 import json
-import subprocess
+from .ollama_stream import ollama_run_for_kb  # 🔥 CAMBIO: usar función del archivo actualizado
 
 class KnowledgeBase:
     def __init__(self, namespace="global"):
@@ -37,14 +37,8 @@ class KnowledgeBase:
         Devuelve un resumen de los documentos más relevantes (máximo {max_docs}) como texto, para ayudar a responder la pregunta.
         """
         try:
-            result = subprocess.run(
-                ["ollama", "run", "deepseek-r1:14b_educator_"],
-                input=prompt,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace"
-            )
-            return result.stdout.strip()
+            # 🔥 CAMBIO: usar función interna en lugar de subprocess
+            result = ollama_run_for_kb("deepseek-r1:14b_educator_", prompt)
+            return result.strip()
         except Exception as e:
             return f"⚠️ Error al buscar contexto relevante: {e}"
