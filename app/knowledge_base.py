@@ -1,281 +1,372 @@
-# knowledge_base.py - ADAPTADO PARA GROQ
+"""
+ollama_stream.py - MODIFICADO PARA GROQ - INICIALIZACIÓN LAZY
+Módulo para manejo de streaming usando EXCLUSIVAMENTE Groq Cloud
+Llama 3.3 70B en todos los casos (local y producción)
+"""
 
-import os
 import json
-from .ollama_stream import ollama_run_for_kb  # ✅ Ahora usa Groq internamente
+import re
+import time
+import logging
+import os
+from typing import Generator, Dict, Any, List, Optional
+from datetime import datetime
 
-class KnowledgeBase:
-    def __init__(self, namespace="global"):
-        self.namespace = namespace
-        self.db_folder = os.path.join("vector_store", self.namespace)
-        os.makedirs(self.db_folder, exist_ok=True)
-        self.index_file = os.path.join(self.db_folder, "index.json")
-        self.documents = []
-        self.load_documents()
+# NUEVA IMPORTACIÓN: Groq
+from groq import Groq
 
-    def load_documents(self):
-        """Carga los documentos desde el archivo de índice"""
-        if os.path.exists(self.index_file):
-            with open(self.index_file, "r", encoding="utf-8") as f:
-                self.documents = json.load(f)
+# Configuración de logging
+logger = logging.getLogger(__name__)
+
+class GroqConfig:
+    """Configuración centralizada para Groq Cloud"""
+    def __init__(self, api_key: Optional[str] = None, model: str = "llama-3.3-70b-versatile"):
+        self.api_key = api_key or os.environ.get('GROQ_API_KEY')
+        self.model = model
+        if not self.api_key:
+            raise ValueError("GROQ_API_KEY requerida. Obtén una gratis en https://console.groq.com/keys")
+    
+    def __str__(self):
+        masked_key = f"{self.api_key[:8]}..." if self.api_key else "None"
+        return f"GroqConfig(model={self.model}, api_key={masked_key})"
+
+# 🔥 CAMBIO CRÍTICO: NO inicializar automáticamente
+config = None
+
+def get_config():
+    """Obtiene la configuración, inicializándola si es necesario"""
+    global config
+    if config is None:
+        # Intentar configurar desde variables de entorno
+        api_key = os.environ.get('GROQ_API_KEY')
+        if not api_key:
+            # Si no hay API key, dar instrucciones claras
+            raise ValueError(
+                "❌ GROQ_API_KEY no configurada.\n"
+                "💡 Soluciones:\n"
+                "   1. Configura variable de entorno: export GROQ_API_KEY='tu_api_key'\n"
+                "   2. O usa: set_groq_config('tu_api_key')\n"
+                "   3. Obtén API key gratis en: https://console.groq.com/keys"
+            )
+        config = GroqConfig(api_key=api_key)
+        logger.info(f"✅ Groq configurado automáticamente: {config}")
+    return config
+
+def set_groq_config(api_key: Optional[str] = None, model: str = "llama-3.3-70b-versatile"):
+    """Configura la conexión a Groq Cloud"""
+    global config
+    config = GroqConfig(api_key=api_key, model=model)
+    logger.info(f"Configuración Groq actualizada: {config}")
+
+def limpiar_output(texto: str, preserve_trailing_space: bool = False) -> str:
+    """
+    Limpia el texto de caracteres ANSI, spinners y formato extra.
+    Si preserve_trailing_space es True, NO eliminará los espacios finales,
+    pero sí eliminará saltos de línea terminales extras.
+    """
+    if not texto:
+        return ""
+
+    # Remover secuencias de escape ANSI
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    limpio = ansi_escape.sub('', texto)
+
+    # Remover caracteres de spinner
+    spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    limpio = ''.join(c for c in limpio if c not in spinner_chars)
+
+    # Normalizar saltos de línea múltiples
+    limpio = re.sub(r'\n{3,}', '\n\n', limpio)
+
+    if preserve_trailing_space:
+        return re.sub(r'[\r\n]+$', '', limpio)
+    else:
+        return limpio.strip()
+
+class GroqClient:
+    """Cliente unificado para Groq Cloud"""
+    
+    def __init__(self):
+        self.config = get_config()  # 🔥 CAMBIO: usar get_config()
+        self.client = Groq(api_key=self.config.api_key)
+    
+    def chat_completion(self, messages: List[Dict[str, str]], temperature: float = 0.8) -> str:
+        """Completa un chat sin streaming usando Groq"""
+        try:
+            completion = self.client.chat.completions.create(
+                model=self.config.model,
+                messages=messages,
+                temperature=temperature,
+                max_completion_tokens=4096,  # Generoso para respuestas educativas
+                top_p=0.95,
+                stream=False,
+                stop=None
+            )
+            
+            response = completion.choices[0].message.content
+            return limpiar_output(response) if response else ""
+            
+        except Exception as e:
+            logger.error(f"Error en Groq completion: {e}")
+            raise
+    
+    def stream_completion(self, messages: List[Dict[str, str]], temperature: float = 0.8) -> Generator[str, None, None]:
+        """Stream de chat usando Groq Cloud"""
+        try:
+            completion = self.client.chat.completions.create(
+                model=self.config.model,
+                messages=messages,
+                temperature=temperature,
+                max_completion_tokens=4096,
+                top_p=0.95,
+                stream=True,
+                stop=None
+            )
+            
+            for chunk in completion:
+                content = chunk.choices[0].delta.content
+                if content:
+                    # Limpiar y procesar chunk
+                    clean_chunk = limpiar_output(content, preserve_trailing_space=True)
+                    if clean_chunk:
+                        yield clean_chunk
+                        
+        except Exception as e:
+            logger.error(f"Error en Groq streaming: {e}")
+            yield f"Error: No pude procesar tu consulta con Groq. {str(e)}"
+
+def test_groq_connection() -> bool:
+    """Prueba la conexión con Groq Cloud"""
+    try:
+        client = GroqClient()
+        test_messages = [{"role": "user", "content": "Hola, responde solo 'OK'"}]
+        response = client.chat_completion(test_messages)
+        
+        if response:
+            logger.info("✅ Conexión con Groq Cloud exitosa")
+            return True
         else:
-            self.documents = []
-
-    def save_documents(self):
-        """Guarda los documentos en el archivo de índice"""
-        with open(self.index_file, "w", encoding="utf-8") as f:
-            json.dump(self.documents, f, ensure_ascii=False, indent=2)
-
-    def add_document(self, text):
-        """Agrega un nuevo documento a la base de conocimientos"""
-        if text and text.strip():  # Validación básica
-            self.documents.append(text.strip())
-            self.save_documents()
-            return True
-        return False
-
-    def remove_document(self, index):
-        """Remueve un documento por índice"""
-        if 0 <= index < len(self.documents):
-            removed = self.documents.pop(index)
-            self.save_documents()
-            return removed
-        return None
-
-    def get_document_count(self):
-        """Retorna el número total de documentos"""
-        return len(self.documents)
-
-    def retrieve_relevant_documents(self, query, max_docs=3):
-        """
-        Usa Groq Cloud (Llama 3.3 70B) para encontrar documentos relevantes
-        """
-        if not self.documents:
-            return "No hay documentos en la base de conocimientos."
-        
-        if not query.strip():
-            return "Consulta vacía."
-
-        # 🎯 PROMPT OPTIMIZADO PARA LLAMA 3.3 70B
-        prompt = f"""Eres un sistema de recuperación de información inteligente. Tu tarea es analizar una base de conocimientos y encontrar la información más relevante para responder una pregunta específica.
-
-**BASE DE CONOCIMIENTOS:**
-{json.dumps(self.documents, ensure_ascii=False, indent=2)}
-
-**PREGUNTA DEL USUARIO:**
-{query}
-
-**INSTRUCCIONES:**
-1. Analiza cada documento en la base de conocimientos
-2. Identifica cuáles son más relevantes para la pregunta
-3. Selecciona máximo {max_docs} documentos más relevantes
-4. Crea un resumen conciso que combine la información relevante
-5. Si no encuentras información relevante, dilo claramente
-
-**FORMATO DE RESPUESTA:**
-Proporciona un resumen claro y directo de la información relevante encontrada, organizando los puntos principales de manera lógica."""
-
-        try:
-            # ✅ Esta función ahora usa Groq Cloud internamente
-            result = ollama_run_for_kb("llama-3.3-70b-versatile", prompt)  # Modelo actualizado
-            return result.strip() if result else "No se pudo procesar la consulta."
-            
-        except Exception as e:
-            return f"⚠️ Error al buscar contexto relevante: {e}"
-
-    def search_documents(self, search_term):
-        """Búsqueda simple por texto en los documentos"""
-        if not search_term.strip():
-            return []
-        
-        search_term = search_term.lower()
-        matching_docs = []
-        
-        for i, doc in enumerate(self.documents):
-            if search_term in doc.lower():
-                matching_docs.append({
-                    'index': i,
-                    'document': doc,
-                    'preview': doc[:200] + "..." if len(doc) > 200 else doc
-                })
-        
-        return matching_docs
-
-    def get_all_documents(self):
-        """Retorna todos los documentos con sus índices"""
-        return [{'index': i, 'document': doc} for i, doc in enumerate(self.documents)]
-
-    def update_document(self, index, new_text):
-        """Actualiza un documento existente"""
-        if 0 <= index < len(self.documents) and new_text.strip():
-            self.documents[index] = new_text.strip()
-            self.save_documents()
-            return True
-        return False
-
-    def clear_all_documents(self):
-        """Elimina todos los documentos"""
-        self.documents = []
-        self.save_documents()
-
-    def export_knowledge_base(self, filepath):
-        """Exporta la base de conocimientos a un archivo JSON"""
-        try:
-            export_data = {
-                'namespace': self.namespace,
-                'document_count': len(self.documents),
-                'documents': self.documents,
-                'exported_at': json.dumps(str(os.path.getctime(self.index_file)) if os.path.exists(self.index_file) else "unknown")
-            }
-            
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(export_data, f, ensure_ascii=False, indent=2)
-            return True
-        except Exception as e:
-            print(f"Error exportando: {e}")
+            logger.error("❌ Groq respondió vacío")
             return False
-
-    def import_knowledge_base(self, filepath):
-        """Importa una base de conocimientos desde un archivo JSON"""
-        try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                import_data = json.load(f)
             
-            if 'documents' in import_data:
-                # Agregar documentos importados a los existentes
-                imported_docs = import_data['documents']
-                for doc in imported_docs:
-                    if doc.strip() and doc not in self.documents:  # Evitar duplicados
-                        self.documents.append(doc.strip())
-                
-                self.save_documents()
-                return len(imported_docs)
-            return 0
-        except Exception as e:
-            print(f"Error importando: {e}")
-            return 0
+    except Exception as e:
+        logger.error(f"❌ Error probando Groq: {e}")
+        return False
 
-    def get_knowledge_stats(self):
-        """Retorna estadísticas de la base de conocimientos"""
-        if not self.documents:
-            return {
-                'total_documents': 0,
-                'total_characters': 0,
-                'total_words': 0,
-                'average_document_length': 0
-            }
-        
-        total_chars = sum(len(doc) for doc in self.documents)
-        total_words = sum(len(doc.split()) for doc in self.documents)
-        
-        return {
-            'total_documents': len(self.documents),
-            'total_characters': total_chars,
-            'total_words': total_words,
-            'average_document_length': total_chars // len(self.documents),
-            'namespace': self.namespace
-        }
+def build_system_prompt(user_customize_ai: str = "", kb_context: str = "") -> str:
+    """
+    Construye el prompt del sistema combinando personalización y contexto
+    Optimizado para educación con Llama 3.3 70B
+    """
+    base_prompt = """Eres un asistente educativo experto powered by Llama 3.3 70B. Tu función es ayudar a estudiantes y educadores proporcionando explicaciones claras, detalladas y pedagógicamente sólidas.
 
-    def semantic_search(self, query, max_results=5):
-        """
-        Búsqueda semántica usando Groq para entender el contexto
-        Más inteligente que búsqueda por keywords
-        """
-        if not self.documents or not query.strip():
-            return []
-
-        prompt = f"""Eres un sistema de búsqueda semántica. Analiza estos documentos y clasifícalos por relevancia semántica a la consulta.
-
-**DOCUMENTOS:**
-{json.dumps([{'id': i, 'content': doc} for i, doc in enumerate(self.documents)], ensure_ascii=False, indent=2)}
-
-**CONSULTA:** {query}
-
-**TAREA:**
-1. Analiza la intención y el contexto de la consulta
-2. Evalúa la relevancia semántica de cada documento
-3. Clasifica los documentos por relevancia (más relevante primero)
-4. Retorna máximo {max_results} documentos más relevantes
-
-**FORMATO DE RESPUESTA:**
-Responde SOLO con una lista de IDs de documentos ordenados por relevancia, separados por comas.
-Ejemplo: 2,0,5,1
-Si ningún documento es relevante, responde: ninguno"""
-
-        try:
-            result = ollama_run_for_kb("llama-3.3-70b-versatile", prompt)
-            
-            if result.strip().lower() == "ninguno":
-                return []
-            
-            # Parsear IDs de documentos
-            doc_ids = []
-            for id_str in result.strip().split(','):
-                try:
-                    doc_id = int(id_str.strip())
-                    if 0 <= doc_id < len(self.documents):
-                        doc_ids.append(doc_id)
-                except ValueError:
-                    continue
-            
-            # Retornar documentos ordenados por relevancia
-            relevant_docs = []
-            for doc_id in doc_ids[:max_results]:
-                relevant_docs.append({
-                    'index': doc_id,
-                    'document': self.documents[doc_id],
-                    'preview': self.documents[doc_id][:200] + "..." if len(self.documents[doc_id]) > 200 else self.documents[doc_id]
-                })
-            
-            return relevant_docs
-            
-        except Exception as e:
-            print(f"Error en búsqueda semántica: {e}")
-            # Fallback a búsqueda simple
-            return self.search_documents(query)[:max_results]
-
-# Función de utilidad para testing
-def test_knowledge_base():
-    """Prueba las funcionalidades de la base de conocimientos"""
-    print("🧪 Probando KnowledgeBase con Groq...")
+Características de tus respuestas:
+- Explica conceptos paso a paso con ejemplos prácticos
+- Adapta el nivel de complejidad al contexto del usuario
+- Fomenta el pensamiento crítico y la curiosidad
+- Proporciona recursos adicionales cuando sea apropiado
+- Usa un lenguaje claro y accesible
+- Estructura la información de manera lógica y fácil de seguir"""
     
-    # Crear instancia de prueba
-    kb = KnowledgeBase(namespace="test")
+    parts = [base_prompt]
     
-    # Limpiar para prueba fresca
-    kb.clear_all_documents()
+    if user_customize_ai.strip():
+        parts.append(f"Contexto del usuario: {user_customize_ai.strip()}")
     
-    # Agregar documentos de prueba
-    test_docs = [
-        "La fotosíntesis es el proceso por el cual las plantas convierten la luz solar en energía química.",
-        "Python es un lenguaje de programación interpretado de alto nivel.",
-        "La inteligencia artificial incluye machine learning, deep learning y procesamiento de lenguaje natural.",
-        "El cambio climático se refiere al calentamiento global causado por las emisiones de gases de efecto invernadero."
+    if kb_context.strip():
+        parts.append(f"Información relevante de la base de conocimientos: {kb_context.strip()}")
+    
+    return "\n\n".join(parts)
+
+def prepare_messages(user_customize_ai: str, kb_context: str, prompt: str) -> List[Dict[str, str]]:
+    """Prepara los mensajes para la API de Groq"""
+    system_content = build_system_prompt(user_customize_ai, kb_context)
+    
+    messages = [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": prompt}
     ]
     
-    for doc in test_docs:
-        kb.add_document(doc)
+    return messages
+
+def stream_chat_for_user(
+    user_customize_ai: str = "",
+    kb_context: str = "",
+    prompt: str = "",
+    model: str = None,  # Ignorado, siempre usa Groq
+    timeout: int = None  # Ignorado, Groq maneja internamente
+) -> Generator[str, None, None]:
+    """
+    Genera un stream de chat usando EXCLUSIVAMENTE Groq Cloud
+    """
+    if not prompt.strip():
+        yield "Error: El prompt no puede estar vacío."
+        return
     
-    print(f"✅ Agregados {kb.get_document_count()} documentos")
+    # Preparar mensajes
+    messages = prepare_messages(user_customize_ai, kb_context, prompt)
     
-    # Probar recuperación de documentos relevantes
-    query = "¿Cómo funciona la fotosíntesis?"
-    print(f"\n🔍 Consultando: '{query}'")
+    try:
+        current_config = get_config()  # 🔥 CAMBIO: obtener config dinámicamente
+        logger.info(f"🚀 Iniciando stream con Groq Cloud - Modelo: {current_config.model}")
+        
+        groq_client = GroqClient()
+        
+        for chunk in groq_client.stream_completion(messages):
+            if chunk:
+                yield chunk
+                
+    except Exception as e:
+        logger.error(f"Error en streaming Groq: {e}")
+        yield f"⚠️ Error: No pude procesar tu consulta. Detalles: {str(e)}"
+
+def chat_once(
+    messages: List[Dict[str, str]],
+    model: str = None,  # Ignorado, siempre usa Groq
+    timeout: int = None  # Ignorado
+) -> str:
+    """
+    Realiza una sola consulta usando EXCLUSIVAMENTE Groq Cloud
+    """
+    try:
+        current_config = get_config()  # 🔥 CAMBIO: obtener config dinámicamente
+        logger.info(f"💬 Consulta única con Groq Cloud - Modelo: {current_config.model}")
+        
+        groq_client = GroqClient()
+        response = groq_client.chat_completion(messages)
+        
+        logger.info(f"✅ Consulta completada: {len(response)} caracteres")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error en consulta Groq: {e}")
+        return f"⚠️ Error: No pude procesar tu consulta. Detalles: {str(e)}"
+
+def set_debug_mode(enabled: bool = True):
+    """Habilita/deshabilita el modo debug para logging detallado"""
+    level = logging.DEBUG if enabled else logging.INFO
+    logging.getLogger(__name__).setLevel(level)
+    logger.info(f"Modo debug {'habilitado' if enabled else 'deshabilitado'}")
+
+def get_available_models() -> List[str]:
+    """Obtiene la lista de modelos disponibles en Groq"""
+    return [
+        "llama-3.3-70b-versatile",    # 🎯 Recomendado (default)
+        "llama-3.1-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it"
+    ]
+
+# Función especial para KnowledgeBase
+def ollama_run_for_kb(model: str, prompt: str) -> str:
+    """
+    Función para reemplazar subprocess en KnowledgeBase
+    Ahora usa Groq Cloud en lugar de Ollama local
+    """
+    try:
+        messages = [{"role": "user", "content": prompt}]
+        response = chat_once(messages)
+        return response
+    except Exception as e:
+        logger.error(f"Error en ollama_run_for_kb: {e}")
+        return f"⚠️ Error al procesar consulta: {e}"
+
+# FUNCIONES DE UTILIDAD Y TESTING
+
+def test_stream_functionality(prompt: str = "Explica el concepto de fotosíntesis de manera didáctica para estudiantes de secundaria"):
+    """Función de prueba para verificar que el streaming funciona correctamente"""
+    try:
+        current_config = get_config()
+        print(f"🧪 Probando streaming Groq con prompt: '{prompt}'")
+        print(f"🔧 Modelo configurado: {current_config.model}")
+        print(f"🔑 API Key: {current_config.api_key[:8]}...")
+        
+        accumulated = ""
+        chunk_count = 0
+        start_time = time.time()
+        
+        for chunk in stream_chat_for_user(prompt=prompt):
+            accumulated += chunk
+            chunk_count += 1
+            print(f"Chunk #{chunk_count}: {repr(chunk[:50])}...")
+        
+        elapsed = time.time() - start_time
+        
+        print(f"\n✅ Prueba completada:")
+        print(f"   - Tiempo total: {elapsed:.2f}s")
+        print(f"   - Chunks recibidos: {chunk_count}")
+        print(f"   - Contenido total: {len(accumulated)} caracteres")
+        print(f"   - Velocidad: {len(accumulated)/elapsed:.1f} chars/seg")
+        print(f"   - Respuesta: {accumulated[:200]}...")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error en prueba: {e}")
+        return False
+
+def setup_groq_from_env():
+    """Configura Groq automáticamente desde variables de entorno"""
+    api_key = os.environ.get('GROQ_API_KEY')
+    model = os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')
     
-    result = kb.retrieve_relevant_documents(query, max_docs=2)
-    print(f"📄 Resultado: {result[:200]}...")
-    
-    # Probar búsqueda semántica
-    print(f"\n🧠 Búsqueda semántica para: '{query}'")
-    semantic_results = kb.semantic_search(query, max_results=2)
-    for i, doc in enumerate(semantic_results):
-        print(f"   {i+1}. {doc['preview']}")
-    
-    # Mostrar estadísticas
-    stats = kb.get_knowledge_stats()
-    print(f"\n📊 Estadísticas: {stats}")
-    
-    return True
+    if api_key:
+        set_groq_config(api_key=api_key, model=model)
+        logger.info("✅ Groq configurado desde variables de entorno")
+        return True
+    else:
+        logger.warning("⚠️ GROQ_API_KEY no encontrada en variables de entorno")
+        return False
+
+def is_groq_configured() -> bool:
+    """Verifica si Groq está configurado sin lanzar excepción"""
+    try:
+        get_config()
+        return True
+    except ValueError:
+        return False
+
+def get_groq_status() -> dict:
+    """Obtiene el estado actual de la configuración de Groq"""
+    try:
+        current_config = get_config()
+        return {
+            "configured": True,
+            "model": current_config.model,
+            "api_key_present": bool(current_config.api_key),
+            "api_key_preview": current_config.api_key[:8] + "..." if current_config.api_key else "None"
+        }
+    except ValueError as e:
+        return {
+            "configured": False,
+            "error": str(e),
+            "model": None,
+            "api_key_present": False
+        }
 
 if __name__ == "__main__":
-    test_knowledge_base()
+    # Configurar logging para pruebas
+    logging.basicConfig(level=logging.INFO)
+    
+    # Verificar estado de configuración
+    status = get_groq_status()
+    print(f"🔍 Estado de Groq: {status}")
+    
+    if not status["configured"]:
+        print("❌ Groq no está configurado")
+        print("💡 Configura GROQ_API_KEY como variable de entorno")
+        print("   Obtén tu API key gratis en: https://console.groq.com/keys")
+        
+        # Ejemplo de cómo configurar manualmente
+        print("\n🛠️ Para configurar manualmente:")
+        print("   set_groq_config('tu_api_key_aqui')")
+        exit(1)
+    
+    # Probar conexión
+    if test_groq_connection():
+        # Ejecutar prueba de streaming
+        set_debug_mode(True)
+        test_stream_functionality()
+    else:
+        print("❌ No se pudo conectar con Groq Cloud")
