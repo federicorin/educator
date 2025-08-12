@@ -4,8 +4,7 @@ Flask-Migrate==4.0.5
 Werkzeug==2.3.7
 gunicorn==21.2.0
 
-# Base de datos
-sqlite3
+# Base de datos - sqlite3 viene incluido con Python
 
 # Procesamiento de archivos
 PyMuPDF==1.23.5
