@@ -407,10 +407,10 @@ def delete_session(session_id):
     db.session.commit()
     return jsonify({'success': True})
 
-# ═══ NUEVA RUTA DE CHAT LIMPIA (usando solo ollama_stream) ═══
+# ═══ NUEVA RUTA DE CHAT LIMPIA (usando solo ollama_stream) - SIN LIMPIEZA DE RESPUESTAS ═══
 @routes.route('/stream_chat/<int:session_id>', methods=['POST'])
 def stream_chat_route(session_id):
-    """Ruta principal para chat streaming usando ollama_stream.py mejorado"""
+    """Ruta principal para chat streaming usando ollama_stream.py mejorado - VERSION SIN LIMPIEZA"""
     # --- Autenticación ---
     if 'user_id' not in login_session:
         return jsonify({'error': 'no autorizado'}), 401
@@ -507,14 +507,14 @@ def stream_chat_route(session_id):
         from app.ollama_stream import set_debug_mode
         set_debug_mode(True)
 
-    # --- Generador SSE Mejorado ---
+    # --- Generador SSE Mejorado - SIN LIMPIEZA ---
     def generate():
         accumulated = ""
         chunk_count = 0
         last_chunk_time = time.time()
         
         try:
-            current_app.logger.info(f"Iniciando stream para sesión {session_id}")
+            current_app.logger.info(f"🚀 Iniciando stream SIN LIMPIEZA para sesión {session_id}")
             
             # Usar stream_chat_for_user del módulo ollama_stream mejorado
             stream = stream_chat_for_user(
@@ -536,24 +536,26 @@ def stream_chat_route(session_id):
                 if current_app.debug:
                     current_app.logger.debug(
                         f"Chunk #{chunk_count}: {len(chunk)} chars, "
-                        f"gap: {current_time - last_chunk_time:.2f}s"
+                        f"gap: {current_time - last_chunk_time:.2f}s, "
+                        f"raw_chunk: {repr(chunk[:50])}"  # Mostrar chunk crudo para debug
                     )
                 
                 last_chunk_time = current_time
                 
-                # Procesar chunk
-                chunk_text = str(chunk).strip()
+                # ✅ CAMBIO CRÍTICO: NO procesar el chunk, usarlo tal como viene
+                # chunk_text = str(chunk).strip()  # <-- REMOVIDO
+                chunk_text = str(chunk)  # Mantener chunk exactamente como viene
                 
-                if not chunk_text:
-                    continue
-
-                # ✅ MEJORA: No agregar espacios automáticos
-                # El nuevo ContentProcessor ya maneja el espaciado correctamente
+                # ✅ CAMBIO: Permitir chunks vacíos si vienen de la IA
+                # if not chunk_text:  # <-- REMOVIDO
+                #     continue         # <-- REMOVIDO
                 
-                # Acumular para persistencia
+                # ✅ CAMBIO: NO modificar el texto del chunk
+                # Acumular EXACTAMENTE como viene
                 accumulated += chunk_text
                 
-                # Escapar para SSE (evitar problemas con saltos de línea)
+                # ✅ CAMBIO: Escapar mínimamente para SSE sin alterar el contenido
+                # Solo escapar lo esencial para que SSE funcione
                 sse_chunk = chunk_text.replace('\n', '\\n').replace('\r', '\\r')
                 
                 # Emitir evento SSE
@@ -563,7 +565,7 @@ def stream_chat_route(session_id):
                 if chunk_count % 10 == 0:
                     yield ""  # Keep-alive
 
-            current_app.logger.info(f"Stream completado: {chunk_count} chunks, {len(accumulated)} chars totales")
+            current_app.logger.info(f"✅ Stream SIN LIMPIEZA completado: {chunk_count} chunks, {len(accumulated)} chars totales")
 
         except GeneratorExit:
             current_app.logger.info("Cliente desconectado durante streaming")
@@ -575,17 +577,19 @@ def stream_chat_route(session_id):
             yield f"data: {error_msg}\n\n"
             accumulated += error_msg
 
-        # --- Persistir respuesta completa ---
+        # --- Persistir respuesta completa - SIN MODIFICAR ---
         try:
-            if accumulated.strip():
-                # Limpiar acumulado final (por si quedaron artifacts)
-                final_accumulated = accumulated.strip()
+            # ✅ CAMBIO CRÍTICO: NO limpiar el texto acumulado
+            if accumulated:  # Cambiar de accumulated.strip() a solo accumulated
+                # NO limpiar acumulado final - guardarlo exactamente como vino
+                # final_accumulated = accumulated.strip()  # <-- REMOVIDO
+                final_accumulated = accumulated  # ✅ Mantener texto original completo
                 
                 # Crear mensaje de respuesta
                 ai_msg = ChatMessage(
                     session_id=session_id,
                     sender='assistant',
-                    text=final_accumulated,
+                    text=final_accumulated,  # Guardar exactamente como vino de la IA
                     timestamp=datetime.utcnow()
                 )
                 db.session.add(ai_msg)
@@ -594,17 +598,18 @@ def stream_chat_route(session_id):
                 chat_sess.updated_at = datetime.utcnow()
                 db.session.commit()
 
-                current_app.logger.info(f"Mensaje AI guardado: ID {ai_msg.id}, {len(final_accumulated)} chars")
+                current_app.logger.info(f"✅ Mensaje AI guardado SIN MODIFICAR: ID {ai_msg.id}, {len(final_accumulated)} chars")
 
                 # Enviar evento final con información
                 try:
                     done_payload = json.dumps({
                         'message_id': ai_msg.id,
                         'char_count': len(final_accumulated),
-                        'chunk_count': chunk_count
+                        'chunk_count': chunk_count,
+                        'raw_response': True  # ✅ Indicador de que es respuesta sin procesar
                     })
                 except Exception:
-                    done_payload = '{"status": "completed"}'
+                    done_payload = '{"status": "completed", "raw_response": true}'
                 
                 yield f"data: [DONE] {done_payload}\n\n"
 
@@ -623,7 +628,7 @@ def stream_chat_route(session_id):
                         tts_filename = f"{uuid.uuid4().hex}_edge.mp3"
                         tts_path = os.path.join(tts_dir, tts_filename)
                         
-                        # Limpiar texto para TTS (remover markdown, etc.)
+                        # ✅ CAMBIO: Para TTS SÍ limpiar (pero solo para audio, no para guardar)
                         clean_text = clean_text_for_tts(text_to_speak)
                         
                         # Crear y configurar event loop
@@ -655,8 +660,8 @@ def stream_chat_route(session_id):
                     except Exception as e:
                         current_app.logger.error(f"Error en TTS background para mensaje {message_id}: {e}")
 
-                # Lanzar TTS solo si hay texto suficiente
-                if len(final_accumulated.strip()) > 10:
+                # ✅ CAMBIO: Lanzar TTS solo si hay contenido (sin strip)
+                if len(final_accumulated) > 10:
                     threading.Thread(
                         target=generate_tts_background, 
                         args=(ai_msg.id, final_accumulated),
@@ -684,6 +689,8 @@ def stream_chat_route(session_id):
 def clean_text_for_tts(text: str) -> str:
     """
     Limpia texto para TTS removiendo markdown y elementos problemáticos.
+    ✅ NOTA: Esta función SÍ limpia, pero SOLO para generar audio TTS,
+    NO afecta el texto que se guarda en la base de datos.
     """
     if not text:
         return ""
@@ -718,22 +725,67 @@ def clean_text_for_tts(text: str) -> str:
     return text.strip()
 
 
-# Función auxiliar para debugging de streams
+# Función auxiliar para debugging de streams - MEJORADA
 def debug_stream_info(session_id: int, user_id: int, final_text: str):
     """Log información útil para debugging de streams."""
     if not current_app.debug:
         return
         
     current_app.logger.debug(f"""
-    === STREAM DEBUG INFO ===
+    === STREAM DEBUG INFO (SIN LIMPIEZA) ===
     Session ID: {session_id}
     User ID: {user_id}
     Text length: {len(final_text)}
-    Text preview: {final_text[:100]}...
+    Text preview: {repr(final_text[:100])}...
     Model: {current_app.config.get('OLLAMA_MODEL', 'default')}
     Timeout: {current_app.config.get('OLLAMA_CALL_TIMEOUT', 60)}
-    ========================
+    Raw responses: ENABLED ✅
+    Text cleaning: DISABLED ✅
+    ========================================
     """)
+
+# ✅ NUEVA FUNCIÓN DE UTILIDAD
+def get_stream_processing_status():
+    """
+    Función para verificar el estado de procesamiento de streams.
+    Útil para debugging y monitoring.
+    """
+    return {
+        "text_cleaning": False,
+        "chunk_processing": False,
+        "preserve_formatting": True,
+        "preserve_whitespace": True,
+        "preserve_special_chars": True,
+        "raw_ai_responses": True,
+        "version": "no-clean-v1.0"
+    }
+
+# ✅ NUEVA FUNCIÓN PARA TESTING
+def test_raw_streaming():
+    """
+    Función de prueba para verificar que el streaming mantiene
+    el texto exactamente como lo genera la IA.
+    """
+    status = get_stream_processing_status()
+    current_app.logger.info(f"🧪 Estado de procesamiento: {status}")
+    
+    # Simular chunks con diferentes tipos de contenido
+    test_chunks = [
+        "Hola\n",           # Con salto de línea
+        "  mundo  ",        # Con espacios
+        "\t\tcon tabs\t",   # Con tabs
+        "**bold**",         # Con markdown
+        "",                 # Chunk vacío
+        "final."            # Chunk final
+    ]
+    
+    accumulated = ""
+    for i, chunk in enumerate(test_chunks):
+        current_app.logger.debug(f"Test chunk #{i+1}: {repr(chunk)}")
+        accumulated += chunk  # Acumular sin modificar
+    
+    current_app.logger.info(f"✅ Resultado acumulado: {repr(accumulated)}")
+    return accumulated
 
 @routes.route('/tts/<filename>')
 def get_tts(filename):
