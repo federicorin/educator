@@ -2,6 +2,7 @@
 ollama_stream.py - MODIFICADO PARA GROQ - INICIALIZACIÓN LAZY
 Módulo para manejo de streaming usando EXCLUSIVAMENTE Groq Cloud
 Llama 3.3 70B en todos los casos (local y producción)
+VERSION SIN LIMPIEZA DE RESPUESTAS - La IA responde tal como genera
 """
 
 import json
@@ -52,36 +53,19 @@ def get_config():
         logger.info(f"✅ Groq configurado automáticamente: {config}")
     return config
 
-def set_groq_config(api_key: Optional[str] = None, model: str = "llama-3.3-70b-versatile"):
+def set_groq_config(api_key: Optional[str] = None, model: str = "meta-llama/llama-4-maverick-17b-128e-instruct"):
     """Configura la conexión a Groq Cloud"""
     global config
     config = GroqConfig(api_key=api_key, model=model)
     logger.info(f"Configuración Groq actualizada: {config}")
 
+# 🚫 FUNCIÓN DESHABILITADA - NO SE USA MÁS
 def limpiar_output(texto: str, preserve_trailing_space: bool = False) -> str:
     """
-    Limpia el texto de caracteres ANSI, spinners y formato extra.
-    Si preserve_trailing_space es True, NO eliminará los espacios finales,
-    pero sí eliminará saltos de línea terminales extras.
+    FUNCIÓN DESHABILITADA - Ahora retorna el texto sin modificar
     """
-    if not texto:
-        return ""
-
-    # Remover secuencias de escape ANSI
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    limpio = ansi_escape.sub('', texto)
-
-    # Remover caracteres de spinner
-    spinner_chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    limpio = ''.join(c for c in limpio if c not in spinner_chars)
-
-    # Normalizar saltos de línea múltiples
-    limpio = re.sub(r'\n{3,}', '\n\n', limpio)
-
-    if preserve_trailing_space:
-        return re.sub(r'[\r\n]+$', '', limpio)
-    else:
-        return limpio.strip()
+    # ✅ CAMBIO PRINCIPAL: Retornar texto original sin modificaciones
+    return texto if texto else ""
 
 class GroqClient:
     """Cliente unificado para Groq Cloud"""
@@ -104,7 +88,8 @@ class GroqClient:
             )
             
             response = completion.choices[0].message.content
-            return limpiar_output(response) if response else ""
+            # ✅ CAMBIO: NO limpiar la respuesta, devolverla tal como viene
+            return response if response else ""
             
         except Exception as e:
             logger.error(f"Error en Groq completion: {e}")
@@ -126,10 +111,8 @@ class GroqClient:
             for chunk in completion:
                 content = chunk.choices[0].delta.content
                 if content:
-                    # Limpiar y procesar chunk
-                    clean_chunk = limpiar_output(content, preserve_trailing_space=True)
-                    if clean_chunk:
-                        yield clean_chunk
+                    # ✅ CAMBIO CRÍTICO: NO limpiar chunks, enviar tal como vienen
+                    yield content
                         
         except Exception as e:
             logger.error(f"Error en Groq streaming: {e}")
@@ -198,6 +181,7 @@ def stream_chat_for_user(
 ) -> Generator[str, None, None]:
     """
     Genera un stream de chat usando EXCLUSIVAMENTE Groq Cloud
+    ✅ VERSION SIN LIMPIEZA - Respuestas tal como las genera la IA
     """
     if not prompt.strip():
         yield "Error: El prompt no puede estar vacío."
@@ -214,6 +198,7 @@ def stream_chat_for_user(
         
         for chunk in groq_client.stream_completion(messages):
             if chunk:
+                # ✅ CAMBIO: Enviar chunks sin modificar
                 yield chunk
                 
     except Exception as e:
@@ -227,6 +212,7 @@ def chat_once(
 ) -> str:
     """
     Realiza una sola consulta usando EXCLUSIVAMENTE Groq Cloud
+    ✅ VERSION SIN LIMPIEZA - Respuesta tal como la genera la IA
     """
     try:
         current_config = get_config()  # 🔥 CAMBIO: obtener config dinámicamente
@@ -236,6 +222,7 @@ def chat_once(
         response = groq_client.chat_completion(messages)
         
         logger.info(f"✅ Consulta completada: {len(response)} caracteres")
+        # ✅ CAMBIO: Retornar respuesta sin limpiar
         return response
         
     except Exception as e:
@@ -251,7 +238,7 @@ def set_debug_mode(enabled: bool = True):
 def get_available_models() -> List[str]:
     """Obtiene la lista de modelos disponibles en Groq"""
     return [
-        "llama-3.3-70b-versatile",    # 🎯 Recomendado (default)
+        "meta-llama/llama-4-maverick-17b-128e-instruct",    # 🎯 Recomendado (default)
         "llama-3.1-70b-versatile",
         "llama-3.1-8b-instant",
         "mixtral-8x7b-32768",
@@ -263,10 +250,12 @@ def ollama_run_for_kb(model: str, prompt: str) -> str:
     """
     Función para reemplazar subprocess en KnowledgeBase
     Ahora usa Groq Cloud en lugar de Ollama local
+    ✅ VERSION SIN LIMPIEZA - Respuesta original de la IA
     """
     try:
         messages = [{"role": "user", "content": prompt}]
         response = chat_once(messages)
+        # ✅ CAMBIO: Retornar respuesta sin modificar
         return response
     except Exception as e:
         logger.error(f"Error en ollama_run_for_kb: {e}")
@@ -281,6 +270,7 @@ def test_stream_functionality(prompt: str = "Explica el concepto de fotosíntesi
         print(f"🧪 Probando streaming Groq con prompt: '{prompt}'")
         print(f"🔧 Modelo configurado: {current_config.model}")
         print(f"🔑 API Key: {current_config.api_key[:8]}...")
+        print("✅ MODO SIN LIMPIEZA ACTIVADO - Respuestas originales de la IA")
         
         accumulated = ""
         chunk_count = 0
@@ -289,7 +279,8 @@ def test_stream_functionality(prompt: str = "Explica el concepto de fotosíntesi
         for chunk in stream_chat_for_user(prompt=prompt):
             accumulated += chunk
             chunk_count += 1
-            print(f"Chunk #{chunk_count}: {repr(chunk[:50])}...")
+            # Mostrar chunk completo sin modificar para debugging
+            print(f"Chunk #{chunk_count}: {repr(chunk)}")
         
         elapsed = time.time() - start_time
         
@@ -298,7 +289,7 @@ def test_stream_functionality(prompt: str = "Explica el concepto de fotosíntesi
         print(f"   - Chunks recibidos: {chunk_count}")
         print(f"   - Contenido total: {len(accumulated)} caracteres")
         print(f"   - Velocidad: {len(accumulated)/elapsed:.1f} chars/seg")
-        print(f"   - Respuesta: {accumulated[:200]}...")
+        print(f"   - Respuesta completa:\n{accumulated}")
         
         return True
         
@@ -309,7 +300,7 @@ def test_stream_functionality(prompt: str = "Explica el concepto de fotosíntesi
 def setup_groq_from_env():
     """Configura Groq automáticamente desde variables de entorno"""
     api_key = os.environ.get('GROQ_API_KEY')
-    model = os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')
+    model = os.environ.get('GROQ_MODEL', 'meta-llama/llama-4-maverick-17b-128e-instruct')
     
     if api_key:
         set_groq_config(api_key=api_key, model=model)
@@ -335,14 +326,16 @@ def get_groq_status() -> dict:
             "configured": True,
             "model": current_config.model,
             "api_key_present": bool(current_config.api_key),
-            "api_key_preview": current_config.api_key[:8] + "..." if current_config.api_key else "None"
+            "api_key_preview": current_config.api_key[:8] + "..." if current_config.api_key else "None",
+            "cleaning_disabled": True  # ✅ Nueva propiedad
         }
     except ValueError as e:
         return {
             "configured": False,
             "error": str(e),
             "model": None,
-            "api_key_present": False
+            "api_key_present": False,
+            "cleaning_disabled": True  # ✅ Nueva propiedad
         }
 
 if __name__ == "__main__":
@@ -370,4 +363,3 @@ if __name__ == "__main__":
         test_stream_functionality()
     else:
         print("❌ No se pudo conectar con Groq Cloud")
-
