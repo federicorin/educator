@@ -1893,59 +1893,6 @@ if (searchBtn && searchContainer && searchInput && searchResults && chatListCont
   });
 
   // =======================
-  // ➕ Crear nuevo chat
-  // =======================
-async function createSessionAndRedirect(prompt) {
-  try {
-    const resp = await fetch("/chat/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "",  // Sin prompt
-    });
-
-    if (!resp.ok) {
-      alert("Error al crear la sesión");
-      return;
-    }
-
-    const data = await resp.json();
-    const sessionUrl = data.session_url;
-
-    // Redirigimos con el mensaje como parámetro
-    const encodedPrompt = encodeURIComponent(prompt);
-    window.location.href = `${sessionUrl}?initial_prompt=${encodedPrompt}`;
-
-  } catch (error) {
-    console.error("Error al crear sesión:", error);
-    alert("Error al conectar con el servidor");
-  }
-}
-
-
-  const promptInput = document.getElementById("prompt");
-
-  // Enviar al presionar botón ↑
-  if (sendBtn && promptInput) {
-    sendBtn.addEventListener("click", () => {
-      const prompt = promptInput.value.trim();
-      if (prompt) {
-        createSessionAndRedirect(prompt);
-      }
-    });
-
-    // Enviar al presionar Enter (sin Shift)
-    promptInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        const prompt = promptInput.value.trim();
-        if (prompt) {
-          createSessionAndRedirect(prompt);
-        }
-      }
-    });
-  }
-
-  // =======================
   // 📥 Colapsar/Expandir sidebar
   // =======================
   const sidebar = document.querySelector('.sidebar');
@@ -2148,5 +2095,6 @@ fileInput.addEventListener('change', () => {
 </body>
 
 </html>
+
 
 
