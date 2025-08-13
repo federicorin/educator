@@ -357,22 +357,32 @@ def get_available_models() -> List[str]:
         "gemma2-9b-it" 
     ] 
 
-# Función especial para KnowledgeBase 
-def ollama_run_for_kb(model: str, prompt: str) -> str: 
-    """ 
+# Función especial para KnowledgeB
+def ollama_run_for_kb(model: str, prompt: str) -> str:
+    """
     Función para reemplazar subprocess en KnowledgeBase 
-    Ahora usa Groq Cloud en lugar de Ollama local 
-    ✅ VERSION SIN LIMPIEZA - Respuesta original de la IA 
-    🆕 NUEVO: Con personalidad configurable desde .env
-    """ 
+    ✅ ARREGLADO: Ahora respeta el parámetro modelo
+    """
     try: 
-        messages = [{"role": "user", "content": prompt}] 
-        response = chat_once(messages) 
-        # ✅ CAMBIO: Retornar respuesta sin modificar 
-        return response 
+        # Crear cliente con modelo específico
+        temp_config = GroqConfig(model=model)
+        client = Groq(api_key=temp_config.api_key)
+        
+        messages = [{"role": "user", "content": prompt}]
+        
+        completion = client.chat.completions.create(
+            model=model,  # ← Usar el modelo especificado
+            messages=messages,
+            temperature=0.7,
+            max_completion_tokens=4096
+        )
+        
+        response = completion.choices[0].message.content
+        return response if response else ""
+        
     except Exception as e: 
         logger.error(f"Error en ollama_run_for_kb: {e}") 
-        return f"⚠️ Error al procesar consulta: {e}" 
+        return f"⚠️ Error al procesar consulta: {e}"
 
 # 🆕 NUEVAS FUNCIONES DE GESTIÓN DE PERSONALIDAD
 
@@ -486,3 +496,4 @@ def get_groq_status() -> dict:
             "personality": {  # 🆕 Información de personalidad
                 "ai_name": personality.ai_name,
               
+
