@@ -554,16 +554,20 @@ def stream_chat_route(session_id):
                 # Acumular EXACTAMENTE como viene
                 accumulated += chunk_text
                 
-                # ✅ CAMBIO: Escapar mínimamente para SSE sin alterar el contenido
-                # Solo escapar lo esencial para que SSE funcione
-                sse_chunk = chunk_text.replace('\n', '\\n').replace('\r', '\\r')
+                # ✅ ESCAPADO ROBUSTO PARA SSE - Preserva contenido pero evita ruptura del stream
+                sse_chunk = escape_for_sse(chunk_text)
                 
-                # Emitir evento SSE
-                yield f"data: {sse_chunk}\n\n"
+                # ✅ ENVÍO CON VALIDACIÓN ADICIONAL
+                if sse_chunk or chunk_text:  # Enviar si hay contenido escapado O contenido original
+                    yield f"data: {sse_chunk}\n\n"
+                    
+                    # Debug para detectar chunks problemáticos
+                    if current_app.debug and (len(chunk_text) > 0 and len(sse_chunk) == 0):
+                        current_app.logger.warning(f"⚠️ Chunk perdido en escapado: {repr(chunk_text[:50])}")
                 
-                # Flush periódico para streaming suave
-                if chunk_count % 10 == 0:
-                    yield ""  # Keep-alive
+                # Flush periódico para streaming suave - MEJORADO
+                if chunk_count % 5 == 0:  # Más frecuente para mejor fluidez
+                    yield ": keepalive\n\n"  # Comentario SSE estándar
 
             current_app.logger.info(f"✅ Stream SIN LIMPIEZA completado: {chunk_count} chunks, {len(accumulated)} chars totales")
 
@@ -574,7 +578,8 @@ def stream_chat_route(session_id):
         except Exception as e:
             current_app.logger.exception("Error durante streaming desde Ollama: %s", e)
             error_msg = f"[ERROR] Error en el stream: {str(e)}"
-            yield f"data: {error_msg}\n\n"
+            error_escaped = escape_for_sse(error_msg)
+            yield f"data: {error_escaped}\n\n"
             accumulated += error_msg
 
         # --- Persistir respuesta completa - SIN MODIFICAR ---
@@ -600,18 +605,20 @@ def stream_chat_route(session_id):
 
                 current_app.logger.info(f"✅ Mensaje AI guardado SIN MODIFICAR: ID {ai_msg.id}, {len(final_accumulated)} chars")
 
-                # Enviar evento final con información
+                # Enviar evento final con información - ESCAPADO
                 try:
                     done_payload = json.dumps({
                         'message_id': ai_msg.id,
                         'char_count': len(final_accumulated),
                         'chunk_count': chunk_count,
                         'raw_response': True  # ✅ Indicador de que es respuesta sin procesar
-                    })
+                    }, ensure_ascii=False)
                 except Exception:
                     done_payload = '{"status": "completed", "raw_response": true}'
                 
-                yield f"data: [DONE] {done_payload}\n\n"
+                # Escapar el payload JSON también
+                done_escaped = escape_for_sse(f"[DONE] {done_payload}")
+                yield f"data: {done_escaped}\n\n"
 
                 # TTS en background (mejorado con manejo de errores)
                 def generate_tts_background(message_id, text_to_speak):
@@ -671,7 +678,9 @@ def stream_chat_route(session_id):
                 
             else:
                 current_app.logger.warning("Stream completado pero sin contenido acumulado")
-                yield f"data: [WARNING] Stream completado sin contenido\n\n"
+                warning_msg = "[WARNING] Stream completado sin contenido"
+                warning_escaped = escape_for_sse(warning_msg)
+                yield f"data: {warning_escaped}\n\n"
 
         except Exception as e:
             current_app.logger.exception("Error crítico guardando ChatMessage final: %s", e)
@@ -680,13 +689,64 @@ def stream_chat_route(session_id):
             except Exception as rollback_error:
                 current_app.logger.error(f"Error en rollback: {rollback_error}")
             
-            # Informar error al cliente
-            yield f"data: [ERROR] Error guardando respuesta: {str(e)}\n\n"
+            # Informar error al cliente - ESCAPADO
+            error_client_msg = f"[ERROR] Error guardando respuesta: {str(e)}"
+            error_client_escaped = escape_for_sse(error_client_msg)
+            yield f"data: {error_client_escaped}\n\n"
 
     return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
 
-def clean_text_for_tts(text: str) -> str:
+def escape_for_sse(text: str) -> str:
+    """
+    Escapa texto para SSE de manera robusta sin alterar el contenido original.
+    Convierte caracteres problemáticos a secuencias de escape JSON seguras.
+    """
+    if not text:
+        return ""
+    
+    # Usar JSON encode para manejar todos los caracteres especiales
+    import json
+    try:
+        # JSON encode maneja automáticamente: \n, \r, \t, ", \, caracteres unicode, etc.
+        escaped = json.dumps(text, ensure_ascii=False)[1:-1]  # Quitar comillas del inicio y final
+        return escaped
+    except Exception as e:
+        # Fallback manual si JSON falla
+        return (text
+                .replace('\\', '\\\\')   # Barra invertida primero
+                .replace('\n', '\\n')    # Saltos de línea
+                .replace('\r', '\\r')    # Retorno de carro
+                .replace('\t', '\\t')    # Tabs
+                .replace('"', '\\"')     # Comillas dobles
+                .replace('\b', '\\b')    # Backspace
+                .replace('\f', '\\f')    # Form feed
+                )
+
+
+def unescape_from_sse(escaped_text: str) -> str:
+    """
+    Revierte el escapado SSE para recuperar el texto original.
+    Para usar en el frontend si es necesario.
+    """
+    if not escaped_text:
+        return ""
+    
+    import json
+    try:
+        # JSON decode restaura el texto original
+        return json.loads(f'"{escaped_text}"')
+    except Exception:
+        # Fallback manual
+        return (escaped_text
+                .replace('\\n', '\n')
+                .replace('\\r', '\r') 
+                .replace('\\t', '\t')
+                .replace('\\"', '"')
+                .replace('\\b', '\b')
+                .replace('\\f', '\f')
+                .replace('\\\\', '\\')   # Barra invertida al final
+                )
     """
     Limpia texto para TTS removiendo markdown y elementos problemáticos.
     ✅ NOTA: Esta función SÍ limpia, pero SOLO para generar audio TTS,
@@ -760,32 +820,62 @@ def get_stream_processing_status():
         "version": "no-clean-v1.0"
     }
 
-# ✅ NUEVA FUNCIÓN PARA TESTING
+# ✅ NUEVA FUNCIÓN PARA TESTING ROBUSTO
 def test_raw_streaming():
     """
     Función de prueba para verificar que el streaming mantiene
-    el texto exactamente como lo genera la IA.
+    el texto exactamente como lo genera la IA y no se rompe el SSE.
     """
     status = get_stream_processing_status()
     current_app.logger.info(f"🧪 Estado de procesamiento: {status}")
     
-    # Simular chunks con diferentes tipos de contenido
+    # Simular chunks con diferentes tipos de contenido PROBLEMÁTICO
     test_chunks = [
-        "Hola\n",           # Con salto de línea
-        "  mundo  ",        # Con espacios
-        "\t\tcon tabs\t",   # Con tabs
-        "**bold**",         # Con markdown
-        "",                 # Chunk vacío
-        "final."            # Chunk final
+        "Hola\n",                    # Con salto de línea
+        "  mundo  ",                 # Con espacios
+        "\t\tcon tabs\t",            # Con tabs
+        "**bold**",                  # Con markdown
+        "",                          # Chunk vacío
+        'texto con "comillas"',      # Con comillas dobles
+        "barra\\invertida",          # Con barra invertida
+        "emoji 🚀 unicode",          # Con emoji
+        "línea1\nlínea2\rlínea3",   # Múltiples saltos
+        "final."                     # Chunk final
     ]
     
     accumulated = ""
+    sse_test_results = []
+    
     for i, chunk in enumerate(test_chunks):
         current_app.logger.debug(f"Test chunk #{i+1}: {repr(chunk)}")
         accumulated += chunk  # Acumular sin modificar
+        
+        # Probar escapado SSE
+        escaped = escape_for_sse(chunk)
+        unescaped = unescape_from_sse(escaped)
+        
+        sse_test_results.append({
+            'original': chunk,
+            'escaped': escaped,
+            'unescaped': unescaped,
+            'integrity_ok': chunk == unescaped
+        })
+        
+        current_app.logger.debug(f"  Escapado: {repr(escaped)}")
+        current_app.logger.debug(f"  Restaurado: {repr(unescaped)}")
+        current_app.logger.debug(f"  Integridad: {'✅' if chunk == unescaped else '❌'}")
+    
+    # Verificar integridad total
+    integrity_passed = all(result['integrity_ok'] for result in sse_test_results)
     
     current_app.logger.info(f"✅ Resultado acumulado: {repr(accumulated)}")
-    return accumulated
+    current_app.logger.info(f"🔍 Test de integridad SSE: {'✅ PASSED' if integrity_passed else '❌ FAILED'}")
+    
+    return {
+        'accumulated': accumulated,
+        'sse_tests': sse_test_results,
+        'integrity_passed': integrity_passed
+    }
 
 @routes.route('/tts/<filename>')
 def get_tts(filename):
