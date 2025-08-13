@@ -1721,7 +1721,456 @@ function playAudio(audioUrl) {
       document.querySelectorAll('.chat-item.active').forEach(i => i.classList.remove('active'));
     }
   });
+   // =======================
+  // 👤 Search bar
+  // =======================
+const searchBtn = document.getElementById('searchBtn');
+const searchContainer = document.getElementById('searchContainer');
+const searchInput = document.getElementById('searchInput');
+const searchResults = document.getElementById('searchResults');
+const chatListContainer = document.querySelector('.chat-list-container ul');
+
+if (searchBtn && searchContainer && searchInput && searchResults && chatListContainer) {
+
+  // Mostrar/ocultar contenedor búsqueda
+  searchBtn.addEventListener('click', () => {
+    if (searchContainer.style.display === 'none' || !searchContainer.style.display) {
+      searchContainer.style.display = 'block';
+      searchInput.focus();
+    } else {
+      searchContainer.style.display = 'none';
+      searchInput.value = '';
+      searchResults.innerHTML = '';
+      chatListContainer.style.display = 'block';
+    }
+  });
+
+  // Filtrar mientras escribís
+  searchInput.addEventListener('input', () => {
+    const q = searchInput.value.toLowerCase().trim();
+    if (q === '') {
+      searchResults.innerHTML = '';
+      chatListContainer.style.display = 'block';
+      return;
+    }
+
+    // Ocultar lista original
+    chatListContainer.style.display = 'none';
+
+    // Filtrar chats
+    const matches = [];
+    document.querySelectorAll('.chat-item').forEach(item => {
+      const title = item.querySelector('.chat-title').textContent.toLowerCase();
+      if (title.includes(q)) {
+        matches.push({
+          id: item.getAttribute('data-session-id'),
+          name: item.querySelector('.chat-title').textContent
+        });
+      }
+    });
+
+    if (matches.length === 0) {
+      searchResults.innerHTML = '<li>No se encontraron chats.</li>';
+    } else {
+      searchResults.innerHTML = matches.map(m => 
+        `<li class="search-result-item" data-session-id="${m.id}" style="padding:4px; cursor:pointer; border-bottom:1px solid #ccc;">
+          ${m.name}
+        </li>`).join('');
+    }
+  });
+
+  // Click en resultado para ir al chat
+  searchResults.addEventListener('click', e => {
+    const li = e.target.closest('.search-result-item');
+    if (!li) return;
+    const sessionId = li.getAttribute('data-session-id');
+    if (sessionId) {
+      window.location.href = `/chat/session/${sessionId}`;
+    }
+  });
+
+}
+
+
+
+  // =======================
+  // 👤 Mostrar / ocultar menú de perfil
+  // =======================
+  const profile = document.querySelector(".profile");
+  const profileMenu = document.getElementById("profileMenu");
+
+  if (profile && profileMenu) {
+    profile.addEventListener("click", (e) => {
+      e.stopPropagation();
+      profileMenu.style.display = profileMenu.style.display === "flex" ? "none" : "flex";
+    });
+
+    window.addEventListener("click", (e) => {
+      if (!profile.contains(e.target) && !profileMenu.contains(e.target)) {
+        profileMenu.style.display = "none";
+      }
+    });
+  }
+
+  // =======================
+  // 🧠 Ir a la Memoria
+  // =======================
+  const memoriaBtn = document.getElementById("memoriaBtn");
+  if (memoriaBtn) {
+    memoriaBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      window.location.href = "/memory";  // Cambia a "/memoria" si tu ruta es esa
+    });
+  }
+
+  // =======================
+  // 🚪 Cerrar sesión
+  // =======================
+  const logoutBtn = document.getElementById("logoutBtn");
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      try {
+        const res = await fetch("/logout", { method: "POST" });
+        if (res.redirected) {
+          window.location.href = res.url;
+        } else {
+          const data = await res.json();
+          if (data.success) {
+            window.location.href = "/login";
+          } else {
+            alert("No se pudo cerrar sesión.");
+          }
+        }
+      } catch (err) {
+        alert("Error de red al cerrar sesión.");
+      }
+    });
+  }
+
+  // =======================
+  // ✏️ Renombrar chat
+  // =======================
+  document.querySelectorAll('.rename-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const sessionId = btn.getAttribute('data-session-id');
+      const newName = prompt("Nuevo nombre para el chat:");
+      if (newName) {
+        const resp = await fetch(`/chat/session/${sessionId}/rename`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `name=${encodeURIComponent(newName)}`
+        });
+        const data = await resp.json();
+        if (data.success) {
+          const titleEl = btn.closest('.chat-item')?.querySelector('.chat-title');
+          if (titleEl) titleEl.textContent = data.name;
+        } else {
+          alert("Error: " + (data.error || "desconocido"));
+        }
+      }
+    });
+  });
+
+  // =======================
+  // 🗑️ Eliminar chat
+  // =======================
+  document.querySelectorAll('.delete-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm("¿Eliminar este chat?")) return;
+      const sessionId = btn.getAttribute('data-session-id');
+      const resp = await fetch(`/chat/session/${sessionId}/delete`, { method: 'POST' });
+      const data = await resp.json();
+      if (data.success) {
+        btn.closest('.chat-item')?.remove();
+      } else {
+        alert("Error al eliminar chat");
+      }
+    });
+  });
+
+  // =======================
+  // ⋮ Menú de acciones de chat (.chat-dots)
+  // =======================
+  document.querySelectorAll('.chat-dots').forEach(dots => {
+    dots.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const item = dots.closest('.chat-item');
+
+      // Cierra otros
+      document.querySelectorAll('.chat-item.active').forEach(i => {
+        if (i !== item) i.classList.remove('active');
+      });
+
+      // Alterna este
+      if (item) item.classList.toggle('active');
+    });
+  });
+
+  // Cierra todos los menús si haces clic fuera
+  window.addEventListener('click', (e) => {
+    if (!e.target.closest('.chat-item')) {
+      document.querySelectorAll('.chat-item.active').forEach(i => i.classList.remove('active'));
+    }
+  });
+
+  // =======================
+  // ➕ Crear nuevo chat
+  // =======================
+async function createSessionAndRedirect(prompt) {
+  try {
+    const resp = await fetch("/chat/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "",  // Sin prompt
+    });
+
+    if (!resp.ok) {
+      alert("Error al crear la sesión");
+      return;
+    }
+
+    const data = await resp.json();
+    const sessionUrl = data.session_url;
+
+    // Redirigimos con el mensaje como parámetro
+    const encodedPrompt = encodeURIComponent(prompt);
+    window.location.href = `${sessionUrl}?initial_prompt=${encodedPrompt}`;
+
+  } catch (error) {
+    console.error("Error al crear sesión:", error);
+    alert("Error al conectar con el servidor");
+  }
+}
+
+
+  const sendBtn = document.querySelector(".send-btn");
+  const promptInput = document.getElementById("prompt");
+
+  // Enviar al presionar botón ↑
+  if (sendBtn && promptInput) {
+    sendBtn.addEventListener("click", () => {
+      const prompt = promptInput.value.trim();
+      if (prompt) {
+        createSessionAndRedirect(prompt);
+      }
+    });
+
+    // Enviar al presionar Enter (sin Shift)
+    promptInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const prompt = promptInput.value.trim();
+        if (prompt) {
+          createSessionAndRedirect(prompt);
+        }
+      }
+    });
+  }
+
+  // =======================
+  // 📥 Colapsar/Expandir sidebar
+  // =======================
+  const sidebar = document.querySelector('.sidebar');
+  const toggleBtn = document.querySelector('.toggle-menu-btn');
+  if (sidebar && toggleBtn) {
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sidebar.classList.toggle('collapsed');
+      document.body.classList.toggle('sidebar-collapsed');
+    });
+  }
+
+});
+
+// =======================
+// 📥 Redirigir al hacer clic en un chat-item
+// =======================
+document.querySelectorAll('.chat-item').forEach(item => {
+  item.addEventListener('click', (e) => {
+    // Evita que se dispare si estás haciendo clic en los íconos de editar/eliminar
+    if (e.target.closest('.rename-btn') || e.target.closest('.delete-btn') || e.target.closest('.chat-dots')) {
+      return;
+    }
+
+    const sessionId = item.getAttribute('data-session-id');
+    if (sessionId) {
+      window.location.href = `/chat/session/${sessionId}`;
+    }
+  });
+});
+
+// =======================
+// 📥 Responsive
+// =======================
+  const sidebar         = document.querySelector('.sidebar');
+  const mobileToggleBtn = document.querySelector('.mobile-toggle-btn');
+  const toggleBtn       = document.querySelector('.toggle-menu-btn');
+  const mainArea        = document.querySelector('.main');
+  const mq              = window.matchMedia('(max-width: 770px)');
+
+  function setupMobileHandlers() {
+    // Solo registro handlers en responsive
+    if (!mq.matches) return;
+
+    // ——— BOTÓN MÓVIL (☰) ———
+    mobileToggleBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      sidebar.classList.toggle('show');
+      sidebar.classList.remove('collapsed');
+      document.body.classList.remove('sidebar-collapsed');
+      mobileToggleBtn.classList.toggle('hidden', sidebar.classList.contains('show'));
+    });
+
+    // ——— BOTÓN TOGGLE DENTRO DEL SIDEBAR ———
+    toggleBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      // Como estamos en responsive, SOLO cerramos
+      sidebar.classList.remove('show');
+      mobileToggleBtn.classList.remove('hidden');
+    });
+
+    // ——— CLICK FUERA EN ÁREA PRINCIPAL ———
+    mainArea.addEventListener('click', () => {
+      if (sidebar.classList.contains('show')) {
+        sidebar.classList.remove('show');
+        mobileToggleBtn.classList.remove('hidden');
+      }
+    });
+  }
+
+  // Ejecutamos al inicio
+  setupMobileHandlers();
+  // Y volvemos a ejecutar si cambia el tamaño
+  mq.addEventListener('change', setupMobileHandlers);
+
+  // (el resto de tu código de mobileToggleBtn permanece igual)
+
+
+    // --- 1. OBTENER ELEMENTOS DEL DOM ---
+    const attachButton = document.getElementById('attachFileBtn');
+    const fileInput = document.getElementById('file-input');
+    const filePreviewsContainer = document.getElementById('file-previews-container');
+    const inputWrapper = document.querySelector('.input-wrapper');
+    const dropZone = document.body;
+
+    // --- 2. GESTIÓN DE LA LISTA DE ARCHIVOS ---
+    let attachedFiles = []; // Array para almacenar todos los archivos
+
+    // --- 3. Mapeo de extensiones a íconos SVG (puedes agregar más)
+    const fileIcons = {
+        'pdf': `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line><line x1="10" y1="9" x2="14" y2="9"></line></svg>`,
+        'txt': `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><line x1="10" y1="9" x2="10" y2="9"></line></svg>`,
+        'jpg': `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 8c0 1.657-1.343 3-3 3s-3-1.343-3-3 1.343-3 3-3 3 1.343 3 3z"></path><path d="M4 4h16v16H4V4z"></path><path d="M4 16l5-5 5 5 5-5"></path></svg>`,
+        'png': `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 8c0 1.657-1.343 3-3 3s-3-1.343-3-3 1.343-3 3-3 3 1.343 3 3z"></path><path d="M4 4h16v16H4V4z"></path><path d="M4 16l5-5 5 5 5-5"></path></svg>`,
+        'default': `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V9l-7-7z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>`
+    };
+
+    // --- 4. FUNCIONALIDAD DEL BOTÓN "ADJUNTAR ARCHIVO" ---
+    attachButton.addEventListener('click', () => {
+        fileInput.click();
+    });
+
+    // --- 5. FUNCIONALIDAD DE "ARRASTRAR Y SOLTAR" (DRAG & DROP) ---
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        }, false);
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        const droppedFiles = e.dataTransfer.files;
+        if (droppedFiles.length > 0) {
+            addFiles(droppedFiles);
+        }
+    }, false);
+
+    // --- 6. MANEJAR ARCHIVOS (TANTO DEL BOTÓN COMO DEL DRAG & DROP) ---
+    fileInput.addEventListener('change', (e) => {
+        const files = e.target.files;
+        if (files.length > 0) {
+            addFiles(files);
+            fileInput.value = ''; // Limpiamos el input para permitir subir los mismos archivos de nuevo
+        }
+    });
+    
+    // --- 7. FUNCIONES PRINCIPALES ---
+
+    /**
+     * Añade archivos a la lista global y actualiza la vista.
+     * @param {FileList} newFiles La lista de archivos a agregar.
+     */
+    function addFiles(newFiles) {
+        // Concatenar los nuevos archivos a la lista existente
+        attachedFiles = [...attachedFiles, ...Array.from(newFiles)];
+        renderPreviews();
+    }
+
+    /**
+     * Elimina un archivo de la lista global por su nombre y actualiza la vista.
+     * @param {string} fileName El nombre del archivo a eliminar.
+     */
+    function removeFile(fileName) {
+        attachedFiles = attachedFiles.filter(file => file.name !== fileName);
+        renderPreviews();
+    }
+
+    /**
+     * Renderiza todas las vistas previas de los archivos en la lista global.
+     */
+    function renderPreviews() {
+        filePreviewsContainer.innerHTML = '';
+        
+        if (attachedFiles.length > 0) {
+            filePreviewsContainer.classList.add('active');
+            
+            attachedFiles.forEach((file) => {
+                const previewElement = document.createElement('div');
+                previewElement.className = 'file-preview';
+                
+                const ext = file.name.split('.').pop().toLowerCase();
+                const icon = fileIcons[ext] || fileIcons.default;
+                
+                previewElement.innerHTML = `
+                    <div class="file-icon">${icon}</div>
+                    <span class="file-name">${file.name}</span>
+                    <button class="remove-btn" type="button">×</button>
+                `;
+                
+                filePreviewsContainer.appendChild(previewElement);
+                
+                const removeBtn = previewElement.querySelector('.remove-btn');
+                removeBtn.addEventListener('click', () => {
+                    removeFile(file.name);
+                });
+            });
+        } else {
+            filePreviewsContainer.classList.remove('active');
+        }
+    }
+    
+const inputArea = document.querySelector('.input-area');
+
+// Esta función ajustará el ancho del contenedor
+function adjustPreviewContainerWidth() {
+  const parentWidth = inputArea.offsetWidth;
+  filePreviewsContainer.style.maxWidth = `${parentWidth}px`;
+}
+
+// Llama a la función al cargar la página y al cambiar el tamaño de la ventana
+window.addEventListener('load', adjustPreviewContainerWidth);
+window.addEventListener('resize', adjustPreviewContainerWidth);
+
+// Llama a la función cada vez que se añadan archivos
+fileInput.addEventListener('change', () => {
+  // Lógica para manejar la selección de archivos...
   
+  // Después de manejar los archivos, ajusta el ancho
+  adjustPreviewContainerWidth();
 </script>
 </body>
+
 </html>
