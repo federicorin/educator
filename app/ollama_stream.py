@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 class GroqConfig:
     """Configuración centralizada para Groq Cloud"""
-    def __init__(self, api_key: Optional[str] = None, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "meta-llama/llama-4-maverick-17b-128e-instruct"):
         self.api_key = api_key or os.environ.get('GROQ_API_KEY')
         self.model = model
         if not self.api_key:
@@ -370,3 +370,4 @@ if __name__ == "__main__":
         test_stream_functionality()
     else:
         print("❌ No se pudo conectar con Groq Cloud")
+
