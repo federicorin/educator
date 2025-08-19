@@ -14,6 +14,52 @@ from dotenv import load_dotenv
 import threading
 import signal
 from datetime import datetime
+
+class ThinkStripper:
+    """Streaming-safe stripper that removes everything between <think>...</think>,
+    including if the tags are split across chunks. Use `.feed(chunk)` to process
+    streaming chunks and `.finalize()` at the end to clear any open buffer.
+    """
+    def __init__(self):
+        self._buffer = ''
+
+    def feed(self, s: str) -> str:
+        data = self._buffer + (s or '')
+        out_parts = []
+        pos = 0
+        while True:
+            m_open = re.search(r'(?i)<think>', data[pos:])
+            if not m_open:
+                out_parts.append(data[pos:])
+                self._buffer = ''
+                break
+            open_start = pos + m_open.start()
+            out_parts.append(data[pos:open_start])
+            after_open = open_start + len(m_open.group())
+            m_close = re.search(r'(?i)</think>', data[after_open:])
+            if m_close:
+                close_end = after_open + m_close.end()
+                pos = close_end
+                continue
+            else:
+                # No closing tag in this chunk; store from open_start onwards
+                self._buffer = data[open_start:]
+                break
+        return ''.join(out_parts)
+
+    def finalize(self) -> str:
+        # Discard any leftover open <think>... (we don't return it)
+        self._buffer = ''
+        return ''
+
+def strip_think_all(text: str) -> str:
+    """Remove all <think>...</think> blocks from a complete text."""
+    if not text:
+        return text
+    return re.sub(r'(?is)<think>.*?</think>', '', text).strip()
+
+# End ThinkStripper / strip_think_all
+
 import secrets
 from datetime import timedelta
 from .models import InviteToken
@@ -322,14 +368,36 @@ def subir_conocimiento():
             filepath = os.path.join(user_folder, filename)
             file.save(filepath)
 
-            texto = procesar_archivo(filepath)
-            if not texto.strip():
-                flash("⚠️ No se pudo extraer texto del archivo", "warning")
-            else:
-                kb = KnowledgeBase(f"{user.role}_{user_id}")
-                kb.add_document(texto)
-                flash("📚 Archivo cargado y procesado", "success")
+            # Instanciamos la KB del usuario (esto crea la carpeta si no existía)
+            kb = KnowledgeBase(f"{user.role}_{user_id}")
 
+# Procesamos el archivo (extrae texto con los extractores disponibles)
+            texto = procesar_archivo(filepath)
+
+# Log para debugging (verifica en consola qué texto llegó)
+            current_app.logger.info("Texto extraído (primeros 800 chars): %s", (texto or "")[:800])
+
+            if not texto or not texto.strip():
+    # Garantizamos que exista index.json (aunque vacío)
+                try:
+                    kb.save_documents()
+                except Exception as e:
+                    current_app.logger.exception("Error al crear index.json: %s", e)
+                flash("⚠️ No se pudo extraer texto del archivo (ver logs).", "warning")
+            else:
+                doc_id = str(uuid.uuid4())
+                meta = {
+                    "filename": filename,
+                    "uploaded_by": user_id,
+                    "uploaded_at": datetime.utcnow().isoformat()
+                }
+                try:
+                    kb.add_document(doc_id, texto, meta=meta)
+                    flash("📚 Archivo cargado y procesado", "success")
+                except Exception as e:
+                    logger.exception("Error guardando documento en la KB: %s", e)
+                    flash("⚠️ Error al indexar el documento en la base de conocimiento.", "error")
+                    
     return render_template('subir_conocimiento.html')
 
 @routes.route('/conocimiento/ver')
@@ -443,74 +511,111 @@ def delete_session(session_id):
 
 @routes.route("/stream_chat/<int:session_id>", methods=["POST"])
 def stream_chat(session_id: int) -> Response:
-    # Minimal auth check (adapt to your auth system)
+    # 1. Autenticación básica
     if 'user_id' not in login_session:
         return ("no autorizado", 401)
+
     sess = ChatSession.query.get_or_404(session_id)
     if sess.user_id != login_session['user_id']:
         return ("forbidden", 403)
 
+    # 2. Obtener prompt del request
     prompt = (request.form.get("prompt") or "").strip()
-    files = request.files.getlist("file")
-    if not prompt.strip():
+    if not prompt:
         return ("Empty prompt", 400)
 
-    kb = KnowledgeBase(namespace=str(session_id))
+    # 3. Guardar mensaje del usuario en DB
+    user_message = ChatMessage(
+        session_id=session_id,
+        sender="user",
+        text=strip_think_all(prompt),
+        timestamp=datetime.utcnow()
+    )
+    db.session.add(user_message)
+    db.session.commit()
 
-    # Obtener upload_root una sola vez fuera del generator
+    # 4. Crear mensaje del asistente ANTES del streaming
+    assistant_message = ChatMessage(
+        session_id=session_id,
+        sender="assistant",
+        text="",  # Empezamos con texto vacío
+        timestamp=datetime.utcnow()
+    )
+    db.session.add(assistant_message)
+    db.session.commit()
+    
+    # Guardamos el ID del mensaje para actualizarlo
+    assistant_msg_id = assistant_message.id
+
+    kb = KnowledgeBase(namespace=str(session_id))
     upload_root = current_app.config.get("UPLOAD_ROOT", os.path.join(os.getcwd(), "uploads"))
 
+    # 5. Recuperar historial antes del generator
+    history = ChatMessage.query.filter_by(session_id=session_id).order_by(ChatMessage.timestamp).all()
+
     def event_stream() -> Generator[str, None, None]:
-        accumulated = ""
+        accumulated_text = ""
+        think_stripper = ThinkStripper()
+        
         try:
-            # First: attempt a semantic retrieval to enrich context
+            # Recuperar documentos relevantes
             try:
                 retrieved = kb.retrieve_relevant_documents(prompt, top_k=3)
             except Exception:
                 retrieved = []
 
-            # Build a compact prompt for the model
-            model_prompt_parts = ["User prompt:\n" + prompt]
+            # Construir historial estilo ChatGPT
+            model_prompt_parts = []
+            for msg in history[:-1]:  # Excluimos el último mensaje (el del asistente vacío)
+                if msg.sender == "user":
+                    model_prompt_parts.append(f"Usuario: {msg.text}")
+                else:
+                    model_prompt_parts.append(f"Asistente: {msg.text}")
+
             for d in retrieved:
                 t = d.get("text") or d.get("summary") or ""
                 if t:
                     model_prompt_parts.append("KB: " + (t if len(t) < 1000 else t[:1000] + "..."))
+
             model_prompt = "\n\n".join(model_prompt_parts)
 
-            # Call the semantic/search bridge; caller gets a list or text
+            # Llamar al modelo
             try:
                 llm_result = ollama_run_for_kb(model_prompt, namespace=str(session_id), top_k=3)
             except Exception as e:
-                # If LLM bridge fails, we fallback to a simple canned reply
                 logger.warning("LLM bridge failed: %s", e)
-                yield _sse_json_event({"chunk": "Lo siento, el servicio de IA no está disponible en este momento."})
+                error_msg = "Lo siento, el servicio de IA no está disponible en este momento."
+                yield _sse_json_event({"chunk": error_msg})
+                accumulated_text = error_msg
                 return
 
-            # llm_result might be a list of documents or a single text
+            # Stream de chunks y acumulación
             if isinstance(llm_result, list):
-                # stream each item as a chunk; in real apps you'd stream tokens
                 for item in llm_result:
                     chunk = item.get("text") or str(item)
-                    accumulated += chunk
-                    yield _sse_json_event({"chunk": chunk})
+                    cleaned = think_stripper.feed(chunk)
+                    if cleaned:
+                        accumulated_text += cleaned
+                        
+                        # Actualizar en BD cada chunk (opcional, para más robustez)
+                        try:
+                            with current_app.app_context():
+                                msg_to_update = ChatMessage.query.get(assistant_msg_id)
+                                if msg_to_update:
+                                    msg_to_update.text = _sanitize_persist(accumulated_text)
+                                    db.session.commit()
+                        except Exception as e:
+                            logger.warning(f"Error updating message in DB: {e}")
+                        
+                        yield _sse_json_event({"chunk": cleaned})
             else:
                 chunk = str(llm_result)
-                accumulated += chunk
-                yield _sse_json_event({"chunk": chunk})
-
-            # Persist final assistant response (sanitized)
-            final_text = _sanitize_persist(accumulated)
-            # Minimal persistence: write to a file under uploads/session_id/messages/<uuid>.json
-            dest_dir = os.path.join(upload_root, "sessions", str(session_id), "messages")
-            os.makedirs(dest_dir, exist_ok=True)
-            filename = f"{uuid.uuid4().hex}.json"
-            with open(os.path.join(dest_dir, filename), "w", encoding="utf-8") as f:
-                json.dump({"role": "assistant", "text": final_text}, f, ensure_ascii=False)
-
-            # TTS COMPLETAMENTE REMOVIDO - más simple y sin problemas de contexto
+                cleaned = think_stripper.feed(chunk)
+                if cleaned:
+                    accumulated_text += cleaned
+                    yield _sse_json_event({"chunk": cleaned})
 
         except GeneratorExit:
-            # client disconnected
             logger.info("SSE client disconnected for session %s", session_id)
         except Exception as e:
             logger.exception("Unexpected error in stream_chat: %s", e)
@@ -518,8 +623,41 @@ def stream_chat(session_id: int) -> Response:
                 yield _sse_json_event({"error": "Internal server error"})
             except Exception:
                 pass
+        finally:
+            # GUARDAR FINAL: Esto se ejecuta SIEMPRE, incluso si el cliente desconecta
+            if accumulated_text:
+                try:
+                    # finalize stripper (discard any open <think>...)
+                    try:
+                        think_stripper.finalize()
+                    except Exception:
+                        pass
+                    with current_app.app_context():
+                        msg_to_update = ChatMessage.query.get(assistant_msg_id)
+                        if msg_to_update:
+                            final_text = _sanitize_persist(accumulated_text)
+                            msg_to_update.text = final_text
+                            msg_to_update.timestamp = datetime.utcnow()  # Actualizar timestamp
+                            db.session.commit()
+                            logger.info(f"Final message saved to DB: {len(final_text)} chars")
+                except Exception as e:
+                    logger.error(f"Error saving final message to DB: {e}")
 
-    return Response(event_stream(), content_type="text/event-stream; charset=utf-8")
+    # 6. Devolver streaming response
+    response = Response(
+        stream_with_context(event_stream()), 
+        content_type="text/event-stream; charset=utf-8"
+    )
+    
+    # Headers importantes para SSE
+    response.headers['Cache-Control'] = 'no-cache'
+    response.headers['Connection'] = 'keep-alive'
+    response.headers['X-Accel-Buffering'] = 'no'  # Para nginx
+
+    return response
+
+
+
 
 @routes.route('/tts/<filename>')
 def get_tts(filename):
