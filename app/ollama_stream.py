@@ -50,13 +50,13 @@ class GroqClientWrapper:
         system_prompt += f". {ai_description}. Respondes de manera {ai_style} y siempre en español."
         
         resp = self.client.chat.completions.create(
-            model="meta-llama/llama-4-maverick-17b-128e-instruct",  # o el modelo que uses
+            model="deepseek-r1-distill-llama-70b",  # o el modelo que uses
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
             ],
-            max_tokens=1000000,
-            temperature=1.4,  # Un poco más de creatividad
+            max_tokens=8192,
+            temperature=1.0,  # Un poco más de creatividad
         )
         # The response parsing depends on the model -- here we keep it permissive
         if isinstance(resp, str):
