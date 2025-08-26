@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    /* Ajustes rápidos */
+    .sidebar { width: 250px; }
+    .chat-window { flex: 1; }
+    .message.user    { text-align: right; }
+    .message.assistant { text-align: left; }
+    .messages { max-height: 70vh; overflow-y: auto; }
+
+    body {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;  /* centra verticalmente */
+  align-items: center;      /* centra horizontalmente */
+  height: 100vh;            /* que ocupe toda la altura */
+  margin: 0;
+  font-family: 'Segoe UI', sans-serif;
+  background-color: #812727;
+}
+.login-container {
+  position: relative;       /* para que el logo absoluto no interfiera */
+  width: 100%;
+  max-width: 400px;
+  padding-top: 2rem;        /* opcional: espacio extra por el logo */
+}
+
+
+
+    .login-box {
+      background: rgba(13, 17, 23, 0.85);
+      padding: 2.5rem;
+      border-radius: 12px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.4);
+      z-index: 3;
+      position: relative;
+    }
+
+    .tabs a {
+      color: white !important;
+    }
+
+    .tabs li.is-active a {
+      background-color: #ffffff !important;
+      color: #000000 !important;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+
+    .input {
+      background-color: #161b22;
+      color: white;
+      border: 1px solid #30363d;
+    }
+
+    .input::placeholder {
+      color: #8b949e;
+    }
+
+    /* clase para invertir botones */
+    .button.inverted {
+      background-color: #ffffff !important;
+      color: #000000 !important;
+      border-color: #ffffff !important;
+    }
+
+    /* opcional: sombra sutil cuando estén invertidos */
+    .button.inverted:hover {
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+
+    /* Fondo animado */
+    .word-bg {
+      position: fixed;       /* fijo sobre todo el viewport */
+      top: 0;
+      left: 0;
+      width: 100vw;          /* ancho completo */
+      height: 100vh;         /* alto completo */
+      overflow: hidden;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    .word {
+      position: absolute;
+      color: #ffffff;
+      font-size: 12vw;       /* 12% del ancho de la pantalla */
+      white-space: nowrap;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.5s ease;
+    }
+
+    .word.show {
+      opacity: 0.15;
+    }
+
+    .word.hide {
+      opacity: 0;
+    }
+
+    @keyframes float {
+      0%   { transform: translateX(100vw); }
+      100% { transform: translateX(-100vw); }
+    }
+
+    .password-wrapper {
+      position: relative;
+    }
+
+    .password-wrapper input {
+      width: 100%;
+      padding-right: 40px;
+      box-sizing: border-box;
+    }
+
+    .toggle-password {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+    }
+
+    .toggle-password .eye {
+      width: 24px;
+      height: 24px;
+      fill: #777;
+      transition: fill 0.3s;
+    }
+
+    .toggle-password:hover .eye {
+      fill: #000;
+    }
+
+    .toggle-password .closed {
+      display: none;
+    }
+
+    .toggle-password.showing .open {
+      display: none;
+    }
+
+    .toggle-password.showing .closed {
+      display: inline;
+    }
+
+    /* Elimina efecto de estilos generales de botones */
+    .toggle-password,
+    .toggle-password svg {
+      all: unset;
+    }
+
+    .toggle-password {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      cursor: pointer;
+    }
+.logo-fixed {
+  position: absolute;
+  top: 1rem;               /* distancia desde el top de la ventana */
+  left: 50%;               /* punto de partida al 50% del ancho */
+  transform: translateX(-50%);  /* lo centra realmente */
+  z-index: 5;              /* por encima del fondo animado */
+  max-height: 4rem;        /* opcional: limita su tamaño */
+}
+
+
+  </style>
+</head>
+<body>
+  <!-- 1) Fondo animado con palabras -->
+  <div id="word-bg" class="word-bg"></div>
+
+    <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Logo" class="logo-fixed;">
+
+
+    <title>Login</title>
+  <!-- 2) Caja de login -->
+  <div class="login-container">
+    <div class="login-box">
+      <h1 class="title is-3 has-text-white has-text-centered">Iniciar Sesión</h1>
+
+      <!-- Tabs -->
+      <div class="tabs is-toggle is-fullwidth mb-4" id="role-tabs">
+        <ul>
+          <li class="is-active" data-role="student"><a>Alumno</a></li>
+          <li data-role="staff"><a>Profesor / Admin</a></li>
+        </ul>
+      </div>
+
+      <!-- Formulario -->
+      <form method="post" id="login-form">
+        <input type="hidden" name="role" id="role-input" value="student" />
+        <div class="field">
+          <label class="label has-text-white">Email</label>
+          <div class="control">
+            <input class="input" type="email" name="email" placeholder="tucorreo@ejemplo.com" required />
+          </div>
+        </div>
+        <div class="field">
+          <label class="label has-text-white">Contraseña</label>
+          <div class="control">
+            <input class="input" type="password" name="password" id="password" placeholder="••••••••" required />
+            <span class="toggle-password" onclick="togglePassword('password', this)">
+              <svg class="eye closed" viewBox="0 0 24 24">
+                <path d="M12 5c-7 0-11 7-11 7s4 7 11 7 11-7 11-7-4-7-11-7zm0 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10z"/>
+                <circle cx="12" cy="12" r="2"/>
+              </svg>
+              <svg class="eye open" viewBox="0 0 24 24">
+                <path d="M1 1l22 22M17.94 17.94C16.14 19.24 14.12 20 12 20c-7 0-11-8-11-8a21.4 21.4 0 0 1 5.32-6.11M9.88 5.07A8.76 8.76 0 0 1 12 4c7 0 11 8 11 8a20.97 20.97 0 0 1-3.84 4.45"/>
+              </svg>
+            </span>
+          </div>
+        </div>
+        <div class="field is-grouped is-grouped-centered mt-4">
+          <div class="control">
+            <button class="button is-primary is-rounded px-5">Ingresar</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 3) Scripts -->
+  <script>
+    document.addEventListener('DOMContentLoaded', () => {
+      const tabs = document.querySelectorAll('#role-tabs li');
+      const roleInput = document.getElementById('role-input');
+      const registerLink = document.getElementById('register-link');
+      const loginBtn = document.querySelector('.button.is-primary');
+      const regBtn = document.querySelector('.button.is-light');
+      // Mostrar/ocultar contraseña
+      window.togglePassword = function(inputId, toggleSpan) {
+        const input = document.getElementById(inputId);
+        const [eyeClosed, eyeOpen] = toggleSpan.querySelectorAll("svg");
+
+        const isPassword = input.type === "password";
+        input.type = isPassword ? "text" : "password";
+        eyeClosed.style.display = isPassword ? "none" : "inline";
+        eyeOpen.style.display = isPassword ? "inline" : "none";
+      };
+
+      // Estado inicial: mostrar solo el ojo "cerrado"
+      const toggles = document.querySelectorAll(".toggle-password");
+      toggles.forEach(toggle => {
+        const [eyeClosed, eyeOpen] = toggle.querySelectorAll("svg");
+        eyeClosed.style.display = "inline";
+        eyeOpen.style.display = "none";
+      });
+
+      tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+          // Alternar pestaña activa
+          tabs.forEach(t => t.classList.remove('is-active'));
+          tab.classList.add('is-active');
+
+          // Ajustar hidden/input
+          const role = tab.dataset.role;
+          roleInput.value = role;
+          if(registerLink) registerLink.style.display = role === 'student' ? 'block' : 'none';
+
+          // Invertir colores de botones si es staff
+          if (role === 'staff') {
+            if(loginBtn) loginBtn.classList.add('inverted');
+            if(regBtn) regBtn.classList.add('inverted');
+          } else {
+            if(loginBtn) loginBtn.classList.remove('inverted');
+            if(regBtn) regBtn.classList.remove('inverted');
+          }
+        });
+      });
+
+      const palabras = [
+        "Educación", "Cooperativismo", "Aprendizaje", "Comunicación", "Tutorías",
+        "Conocimiento", "Colaboración", "Innovación", "Escuela", "Estudio",
+        "Respeto", "Desarrollo", "Formación", "Crecimiento", "Tecnología",
+        "Creatividad", "Investigación", "Motivación", "Liderazgo", "Disciplina",
+        "Solidaridad", "Empatía", "Organización", "Comprensión", "Debate",
+        "Resolución", "Pensamiento", "Crítico", "Proyecto", "Trabajo en equipo",
+        "Mentoría", "Evaluación", "Éxito", "Superación", "Inclusión",
+        "Diversidad", "Metodología", "Calidad", "Competencia", "Sostenibilidad"
+      ];
+
+      const fondo = document.getElementById('word-bg');
+
+      function lanzarPalabra() {
+        const txt = palabras[Math.floor(Math.random()*palabras.length)];
+        const div = document.createElement('div');
+        div.className = 'word';
+        // posición aleatoria
+        div.style.top = `${10 + Math.random()*80}%`;
+        div.style.left = `${Math.random()*80}%`;
+        // tamaño aleatorio entre 4 y 10 rem
+        div.style.fontSize = `${4 + Math.random()*6}rem`;
+        fondo.appendChild(div);
+
+        // typewriter
+        let idx = 0;
+        const speed = 100; // ms por letra
+        function type() {
+          if (idx < txt.length) {
+            div.textContent += txt[idx++];
+            setTimeout(type, speed);
+          } else {
+            // una vez tipeada, mostrar y luego ocultar
+            div.classList.add('show');
+            setTimeout(() => {
+              div.classList.remove('show');
+              div.classList.add('hide');
+              setTimeout(() => fondo.removeChild(div), 500);
+            }, 1500);
+          }
+        }
+        type();
+      }
+
+      setInterval(lanzarPalabra, 800);
+    });
+  </script>
+</body>
+</html>
